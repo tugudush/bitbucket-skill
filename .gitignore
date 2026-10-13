@@ -32,3 +32,6 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Local test skill
+test-skill
