@@ -76,16 +76,28 @@ describe("parseArgs", () => {
     assert.throws(() => parseArgs(["pr-context", "u", "--ful"]), /Unknown flag --ful\. Did you mean --full\?/)
     assert.throws(() => parseArgs(["file", "ws/repo", "a.ts", "--raww"]), /Unknown flag --raww\. Did you mean --raw\?/)
     assert.throws(() => parseArgs(["prs", "ws/repo", "--al"]), /Unknown flag --al\. Did you mean --all\?/)
-    assert.throws(() => parseArgs(["file", "ws/repo", "a.ts", "--raww", "--ref", "main"]), /Unknown flag --raww\. Did you mean --raw\?/)
+    assert.throws(
+      () => parseArgs(["file", "ws/repo", "a.ts", "--raww", "--ref", "main"]),
+      /Unknown flag --raww\. Did you mean --raw\?/,
+    )
     assert.throws(() => parseArgs(["pr-context", "u", "--ful", "--json"]), /Unknown flag --ful\. Did you mean --full\?/)
   })
   test("a flag no command is close to gets no suggestion, and a real value flag still says it needs a value", () => {
-    assert.throws(() => parseArgs(["pr", "u", "--zzzzzz"]), (e) => /Unknown flag --zzzzzz\./.test(e.message) && !/Did you mean/.test(e.message))
+    assert.throws(
+      () => parseArgs(["pr", "u", "--zzzzzz"]),
+      (e) => /Unknown flag --zzzzzz\./.test(e.message) && !/Did you mean/.test(e.message),
+    )
     assert.throws(() => parseArgs(["file", "ws/repo", "a.ts", "--ref"]), /--ref needs a value$/)
-    assert.throws(() => parseArgs(["file", "ws/repo", "a.ts", "--ref", "--raw"]), /--ref needs a value, but the next argument is "--raw"/)
+    assert.throws(
+      () => parseArgs(["file", "ws/repo", "a.ts", "--ref", "--raw"]),
+      /--ref needs a value, but the next argument is "--raw"/,
+    )
     assert.throws(() => parseArgs(["diff", "ws/repo", "a..b", "--path"]), /--path needs a value$/)
     // the removed flag is never suggested
-    assert.throws(() => parseArgs(["diff", "ws/repo", "a..b", "--topi"]), (e) => !/--topic/.test(e.message))
+    assert.throws(
+      () => parseArgs(["diff", "ws/repo", "a..b", "--topi"]),
+      (e) => !/--topic/.test(e.message),
+    )
   })
 })
 
@@ -100,7 +112,11 @@ describe("paging flags that contradict each other (review run 5)", () => {
   })
   test("--max-pages without --all is rejected, and with --all it is fine", () => {
     for (const name of ["branches", "browse", "search-code"]) {
-      assert.throws(() => checkFlags(commands[name], { "max-pages": "5" }), /--max-pages only applies together with --all/, name)
+      assert.throws(
+        () => checkFlags(commands[name], { "max-pages": "5" }),
+        /--max-pages only applies together with --all/,
+        name,
+      )
       assert.doesNotThrow(() => checkFlags(commands[name], { all: true, "max-pages": "5" }), name)
     }
   })
@@ -166,7 +182,10 @@ describe("flags the endpoint ignores (review run 4)", () => {
         /about 2 s per 100 commits, 48 s for 1,959/.test(e.message),
     )
     // the cost note is specific to commits
-    assert.throws(() => checkFlags(commands["pr-diffstat"], { q: "x" }), (e) => !/about 2 s per 100/.test(e.message))
+    assert.throws(
+      () => checkFlags(commands["pr-diffstat"], { q: "x" }),
+      (e) => !/about 2 s per 100/.test(e.message),
+    )
   })
   test("help says which of --q/--sort a command takes", () => {
     assert.match(helpFor("commits"), /\(not --q\/--sort: Bitbucket ignores them on this endpoint\)/)
@@ -204,8 +223,7 @@ describe("value helpers", () => {
     assert.equal(int("5", "--tail"), 5)
     assert.equal(int(undefined, "--tail"), undefined)
     assert.equal(int("0", "--context", 0), 0)
-    for (const bad of ["0", "-1", "1.5", "abc"])
-      assert.throws(() => int(bad, "--tail"), /--tail must be/)
+    for (const bad of ["0", "-1", "1.5", "abc"]) assert.throws(() => int(bad, "--tail"), /--tail must be/)
   })
   test("enc and encPath reject dot segments", () => {
     assert.throws(() => enc(".."), /Invalid path segment/)
@@ -278,7 +296,10 @@ describe("value helpers", () => {
   })
   test("project works on a single object", () => {
     const warnings = []
-    assert.deepEqual(project({ a: { b: 1 } }, "a.b,a.c", (m) => warnings.push(m)), { "a.b": 1, "a.c": null })
+    assert.deepEqual(
+      project({ a: { b: 1 } }, "a.b,a.c", (m) => warnings.push(m)),
+      { "a.b": 1, "a.c": null },
+    )
     assert.equal(warnings.length, 1)
   })
   test("the version is the same in bb.mjs, package.json and the README", () => {
@@ -303,7 +324,10 @@ describe("paths and arguments", () => {
     assert.throws(() => pathFlag({ path: "C:/Program Files/Git/x" }), /rewrote/)
   })
   test("a flag given twice is an error, not a silent last-wins", () => {
-    assert.throws(() => parseArgs(["diffstat", "ws/repo", "a..b", "--path", "x", "--path", "y"]), /--path was given more than once.*comma-separated/)
+    assert.throws(
+      () => parseArgs(["diffstat", "ws/repo", "a..b", "--path", "x", "--path", "y"]),
+      /--path was given more than once.*comma-separated/,
+    )
     assert.doesNotThrow(() => parseArgs(["prs", "--json", "--json"]))
   })
   test("--topic was removed and says what to use", () => {
@@ -336,7 +360,10 @@ describe("diffstatText", () => {
   })
   test("a partial page names the total when the API gave one (review run 8)", () => {
     const next = "https://example/next"
-    assert.match(diffstatText("x", { values: [e("a"), e("b")], size: 2295, next }), /^Diffstat for x: first 2 file\(s\) of 2295 \(more exist\), \+4 -2 so far/)
+    assert.match(
+      diffstatText("x", { values: [e("a"), e("b")], size: 2295, next }),
+      /^Diffstat for x: first 2 file\(s\) of 2295 \(more exist\), \+4 -2 so far/,
+    )
     // a total that is not larger than what was read adds nothing
     assert.match(diffstatText("x", { values: [e("a"), e("b")], size: 2, next }), /first 2 file\(s\) \(more exist\)/)
   })
@@ -457,10 +484,19 @@ describe("parseRepoToken", () => {
     assert.deepEqual(u("src/feature%2Fx/a%20b.ts?at=feature%2Fx#lines-4"), { ref: "feature/x", path: "a b.ts" })
     assert.deepEqual(u("raw/main/a.ts"), { ref: "main", path: "a.ts" })
     assert.deepEqual(u("src/50%/a"), { ref: "50%", path: "a" }) // a stray % is part of the name
-    assert.deepEqual(parseRepoToken("https://api.bitbucket.org/2.0/repositories/ws/repo/commit/abc123").url, { commit: "abc123" })
+    assert.deepEqual(parseRepoToken("https://api.bitbucket.org/2.0/repositories/ws/repo/commit/abc123").url, {
+      commit: "abc123",
+    })
   })
   test("URLs with nothing more to name keep the plain shape", () => {
-    for (const tail of ["", "pull-requests/12/commits/abc123", "commits/tag/v1", "commits/branch", "pipelines", "branches"])
+    for (const tail of [
+      "",
+      "pull-requests/12/commits/abc123",
+      "commits/tag/v1",
+      "commits/branch",
+      "pipelines",
+      "branches",
+    ])
       assert.equal("url" in parseRepoToken(`https://bitbucket.org/ws/repo/${tail}`), false, tail)
   })
 })
@@ -496,14 +532,23 @@ describe("fileResult", () => {
   test("--raw warns, for stderr, when lines are left out, and says how to get them", () => {
     let r = fileResult(numbered(1455), "f", "main", ctx({ raw: true, limit: "1000" }))
     assert.equal(r.text.split("\n").length, 1000)
-    assert.match(r.warn, /^Warning: --raw printed lines 1-1000 of 1455; 455 line\(s\) are not in this output, so a grep over it can miss matches\. Add --limit 1455 to read to the end, or continue with --start 1001\./)
+    assert.match(
+      r.warn,
+      /^Warning: --raw printed lines 1-1000 of 1455; 455 line\(s\) are not in this output, so a grep over it can miss matches\. Add --limit 1455 to read to the end, or continue with --start 1001\./,
+    )
     // from the middle, the limit that reaches the end is smaller
     r = fileResult(numbered(1455), "f", "main", ctx({ raw: true, start: "1001", limit: "100" }))
-    assert.match(r.warn, /lines 1001-1100 of 1455; 355 line\(s\).*Add --limit 455 to read to the end, or continue with --start 1101\./)
+    assert.match(
+      r.warn,
+      /lines 1001-1100 of 1455; 355 line\(s\).*Add --limit 455 to read to the end, or continue with --start 1101\./,
+    )
     // past the 10000 cap the flag cannot reach the end, and the message does not suggest it
     r = fileResult(numbered(10500), "f", "main", ctx({ raw: true }))
     assert.equal(r.data.end, 10000)
-    assert.match(r.warn, /lines 1-10000 of 10500; 500 line\(s\).*--limit is capped at 10000, so read the rest in pieces, or continue with --start 10001\./)
+    assert.match(
+      r.warn,
+      /lines 1-10000 of 10500; 500 line\(s\).*--limit is capped at 10000, so read the rest in pieces, or continue with --start 10001\./,
+    )
     assert.doesNotMatch(r.warn, /Add --limit/)
   })
   test("the numbered view keeps its 1000-line default and its own footer, with no stderr warning", () => {
@@ -531,9 +576,7 @@ const pr = (id, dest = "main") => ({
 const statuses = (n) =>
   Array.from({ length: n }, (_, i) => ({ state: "SUCCESSFUL", key: `build-${i}`, name: `Build ${i}` }))
 
-const LOG =
-  Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n") +
-  "\n\x1b[31mFAILURE: boom\x1b[0m\n"
+const LOG = Array.from({ length: 1000 }, (_, i) => `line ${i}`).join("\n") + "\n\x1b[31mFAILURE: boom\x1b[0m\n"
 
 let api
 let foreign
@@ -590,7 +633,8 @@ function apiHandler(req, res) {
   }
   if (path === R) return sendJson(res, 200, { full_name: "ws/repo", mainbranch: { name: "main" } })
   if (path === `${R}/refs/branches/main`) return sendJson(res, 200, { name: "main", target: { hash: SHA } })
-  if (path === `${R}/refs/branches/feature%2Fx`) return sendJson(res, 200, { name: "feature/x", target: { hash: SHA2 } })
+  if (path === `${R}/refs/branches/feature%2Fx`)
+    return sendJson(res, 200, { name: "feature/x", target: { hash: SHA2 } })
   if (path === `${R}/src/${SHA}/`)
     return sendJson(res, 200, { values: [{ type: "commit_file", path: "two.txt", size: 8 }] })
   if (path === `${R}/src/${SHA}/two.txt/`) return sendJson(res, 404, { error: { message: "not a dir" } })
@@ -608,8 +652,14 @@ function apiHandler(req, res) {
   if (path === `${R}/src/${SHA}/dirx`)
     return sendJson(res, 200, { values: [{ type: "commit_file", path: "dirx/a.txt", size: 3, commit: { hash: SHA } }] })
   if (path === "/2.0/users/712020%3Aabc")
-    return sendJson(res, 200, { display_name: "Ian Flory", nickname: "Ian (Flo) Flory", account_id: "712020:abc", uuid: "{u-1}" })
-  if (path.startsWith("/2.0/users/")) // live: the 404 message is just the id that was asked for
+    return sendJson(res, 200, {
+      display_name: "Ian Flory",
+      nickname: "Ian (Flo) Flory",
+      account_id: "712020:abc",
+      uuid: "{u-1}",
+    })
+  if (path.startsWith("/2.0/users/"))
+    // live: the 404 message is just the id that was asked for
     return sendJson(res, 404, { error: { message: decodeURIComponent(path.slice("/2.0/users/".length)) } })
   if (path === `${R}/src/${SHA}/emoji.txt`) {
     res.writeHead(200, { "content-type": "text/plain" })
@@ -655,14 +705,37 @@ function apiHandler(req, res) {
     })
   }
   if (path === `${R}/commit/${H_NEW}`)
-    return sendJson(res, 200, { hash: H_NEW, message: "Edit a\n\nlong body", date: "2026-02-01", author: { raw: "Ana" }, parents: [] })
+    return sendJson(res, 200, {
+      hash: H_NEW,
+      message: "Edit a\n\nlong body",
+      date: "2026-02-01",
+      author: { raw: "Ana" },
+      parents: [],
+    })
   if (path === `${R}/commit/${H_OLD}`)
-    return sendJson(res, 200, { hash: H_OLD, message: "Add old-a", date: "2026-01-01", author: { user: { display_name: "Bo" }, raw: "Bo <bo@example.com>" }, parents: [] })
+    return sendJson(res, 200, {
+      hash: H_OLD,
+      message: "Add old-a",
+      date: "2026-01-01",
+      author: { user: { display_name: "Bo" }, raw: "Bo <bo@example.com>" },
+      parents: [],
+    })
   if (/\/commit\/9{38}[0-9a-f]{2}$/.test(path))
-    return sendJson(res, 200, { hash: path.split("/").pop(), message: `msg ${path.slice(-2)}`, date: "2026-03-01", author: { raw: "Cy" }, parents: [] })
+    return sendJson(res, 200, {
+      hash: path.split("/").pop(),
+      message: `msg ${path.slice(-2)}`,
+      date: "2026-03-01",
+      author: { raw: "Cy" },
+      parents: [],
+    })
   // issues: Bitbucket removed them; every endpoint answers 410 (live: CHANGE-3071)
   if (path === `${R}/issues` || path.startsWith(`${R}/issues/`))
-    return sendJson(res, 410, { error: { message: "CHANGE-3071 - Functionality has been deprecated", detail: "Please read the changelog entry for more details." } })
+    return sendJson(res, 410, {
+      error: {
+        message: "CHANGE-3071 - Functionality has been deprecated",
+        detail: "Please read the changelog entry for more details.",
+      },
+    })
   // ranges and single commits with no changes (and no --path filter involved)
   if (path === `${R}/diffstat/empty..main` || path === `${R}/diffstat/emptyc`) return sendJson(res, 200, { values: [] })
   if (path === `${R}/diff/empty..main`) {
@@ -694,7 +767,14 @@ function apiHandler(req, res) {
   // the same author, state and title, so only the source commit tells them apart from the duplicated opening update.
   if (path === `${R}/pullrequests/13/activity`) {
     const upd = (date, hash, changes = {}) => ({
-      update: { author: { display_name: "Ana" }, date, state: "OPEN", title: "PR 13", changes, source: { commit: { hash } } },
+      update: {
+        author: { display_name: "Ana" },
+        date,
+        state: "OPEN",
+        title: "PR 13",
+        changes,
+        source: { commit: { hash } },
+      },
     })
     return sendJson(res, 200, {
       values: [
@@ -744,7 +824,8 @@ function apiHandler(req, res) {
       return sendJson(res, 200, { size: 2, values: [pr(5, "develop"), pr(6, "release/2")] })
     return sendJson(res, 200, { size: 0, values: [] })
   }
-  if (path === `${R}/pullrequests/1` || path === `${R}/pullrequests/2`) return sendJson(res, 200, pr(Number(path.slice(-1))))
+  if (path === `${R}/pullrequests/1` || path === `${R}/pullrequests/2`)
+    return sendJson(res, 200, pr(Number(path.slice(-1))))
   // PR 7 and 8 carry the 12-character source hash the real API returns; 7's full hash can be looked up, 8's cannot.
   // 7 also has a reviewer who approved and one who asked for changes.
   if (path === `${R}/pullrequests/7` || path === `${R}/pullrequests/8`) {
@@ -760,14 +841,20 @@ function apiHandler(req, res) {
       ]
     return sendJson(res, 200, p)
   }
-  if (path === `${R}/commit/${SHORT7}`) return sendJson(res, 200, { hash: FULL7, date: "2026-01-01", message: "x", parents: [] })
-  if (path === `${R}/commit/${DEST7}`) return sendJson(res, 200, { hash: FULLDEST7, date: "2026-01-01", message: "x", parents: [] })
+  if (path === `${R}/commit/${SHORT7}`)
+    return sendJson(res, 200, { hash: FULL7, date: "2026-01-01", message: "x", parents: [] })
+  if (path === `${R}/commit/${DEST7}`)
+    return sendJson(res, 200, { hash: FULLDEST7, date: "2026-01-01", message: "x", parents: [] })
   // a range with an end that no longer exists (a branch deleted by its merge): the same 404 an old PR gets
   if (/\/(diffstat|diff|merge-base)\/gone\.\.(main|[0-9a-f]{12})$/.test(path))
-    return sendJson(res, 404, { error: { message: `The source or destination could not be found for spec: ws/repo:${path.split("/").pop()}.` } })
+    return sendJson(res, 404, {
+      error: { message: `The source or destination could not be found for spec: ws/repo:${path.split("/").pop()}.` },
+    })
   if (/\/pullrequests\/[78]\/(comments|statuses)$/.test(path)) return sendJson(res, 200, { size: 0, values: [] })
   if (/\/pullrequests\/[127]\/diffstat$/.test(path))
-    return sendJson(res, 200, { values: [{ status: "modified", new: { path: "a.ts" }, lines_added: 1, lines_removed: 0 }] })
+    return sendJson(res, 200, {
+      values: [{ status: "modified", new: { path: "a.ts" }, lines_added: 1, lines_removed: 0 }],
+    })
   if (/\/pullrequests\/[12]\/statuses$/.test(path))
     return sendJson(res, 200, { size: 12, values: statuses(10), next: `${apiBase}${R}/pullrequests/1/statuses?page=2` })
   if (path === `${R}/pullrequests/1/comments`) return sendJson(res, 200, { size: 0, values: [] })
@@ -805,8 +892,20 @@ function apiHandler(req, res) {
   if (path === `${R}/pullrequests/1/commits`)
     return sendJson(res, 200, {
       values: [
-        { hash: SHA, message: "Merged in x", date: "2026-01-05", author: { raw: "Ana" }, parents: [{ hash: SHA2 }, { hash: "c".repeat(40) }] },
-        { hash: SHA2, message: "Edit a", date: "2026-01-01", author: { raw: "Ana" }, parents: [{ hash: "c".repeat(40) }] },
+        {
+          hash: SHA,
+          message: "Merged in x",
+          date: "2026-01-05",
+          author: { raw: "Ana" },
+          parents: [{ hash: SHA2 }, { hash: "c".repeat(40) }],
+        },
+        {
+          hash: SHA2,
+          message: "Edit a",
+          date: "2026-01-01",
+          author: { raw: "Ana" },
+          parents: [{ hash: "c".repeat(40) }],
+        },
       ],
     })
   if (path === `${R}/pipelines/%7Bp%7D/steps`)
@@ -832,7 +931,8 @@ function apiHandler(req, res) {
     res.writeHead(302, { location: `${foreign}/log` })
     return res.end()
   }
-  if (path === `${R}/pipelines/%7Bp%7D/steps/%7Bgone%7D/log`) return sendJson(res, 404, { error: { message: "Not found" } })
+  if (path === `${R}/pipelines/%7Bp%7D/steps/%7Bgone%7D/log`)
+    return sendJson(res, 404, { error: { message: "Not found" } })
   if (path === "/2.0/workspaces/empty/search/code") return sendJson(res, 200, { size: 0, values: [] })
   if (path === "/2.0/workspaces/ws/search/code")
     return sendJson(res, 200, {
@@ -876,7 +976,9 @@ function apiHandler(req, res) {
     return res.end("diff --git a/x b/x\n")
   }
   if (path.startsWith(`${R}/diffstat/`))
-    return sendJson(res, 200, { values: [{ status: "modified", new: { path: "a.ts" }, lines_added: 1, lines_removed: 1 }] })
+    return sendJson(res, 200, {
+      values: [{ status: "modified", new: { path: "a.ts" }, lines_added: 1, lines_removed: 1 }],
+    })
   if (path === `${R}/src/${SHA}/big/`) {
     // Like the real API, directory listings page with an opaque token (page=ByUK); a page number is a 400.
     const token = u.searchParams.get("page")
@@ -917,8 +1019,21 @@ function apiHandler(req, res) {
   {
     const mention = (id, name) => `<span class="ap-mention" data-atlassian-id="${id}">${name}</span>`
     const comments31 = [
-      { id: 30, user: { display_name: "Dana" }, created_on: "d1", inline: { path: "a.ts", to: 5 }, resolution: {}, content: { raw: "root" } },
-      { id: 31, user: { display_name: "Dana" }, created_on: "d1", inline: { path: "b.ts", to: 9 }, content: { raw: "still open" } },
+      {
+        id: 30,
+        user: { display_name: "Dana" },
+        created_on: "d1",
+        inline: { path: "a.ts", to: 5 },
+        resolution: {},
+        content: { raw: "root" },
+      },
+      {
+        id: 31,
+        user: { display_name: "Dana" },
+        created_on: "d1",
+        inline: { path: "b.ts", to: 9 },
+        content: { raw: "still open" },
+      },
       {
         id: 32,
         parent: { id: 30 },
@@ -943,7 +1058,8 @@ function apiHandler(req, res) {
         inline: { path: "a.ts", to: 5, outdated: true },
         resolution: { type: "comment_resolution", user: { display_name: "Eli" }, created_on: "d2" },
       })
-    if (path === `${R}/pullrequests/31/comments`) return sendJson(res, 200, { size: comments31.length, values: comments31 })
+    if (path === `${R}/pullrequests/31/comments`)
+      return sendJson(res, 200, { size: comments31.length, values: comments31 })
     if (path === `${R}/pullrequests/31/activity`)
       return sendJson(res, 200, {
         values: [{ comment: comments31[0] }, { comment: comments31[2] }, { comment: comments31[1] }],
@@ -996,8 +1112,7 @@ const listen = (handler) =>
 
 function bb(args, env = {}) {
   const base = { ...process.env }
-  for (const k of Object.keys(base))
-    if (/^(BITBUCKET_|HTTPS?_PROXY$|NODE_USE_ENV_PROXY$)/i.test(k)) delete base[k]
+  for (const k of Object.keys(base)) if (/^(BITBUCKET_|HTTPS?_PROXY$|NODE_USE_ENV_PROXY$)/i.test(k)) delete base[k]
   return new Promise((done) => {
     execFile(
       process.execPath,
@@ -1092,7 +1207,10 @@ describe("CLI against a mock API", () => {
   })
 
   test("the PR's abbreviated source hash is resolved to the full sha, in pr and pr-context", async () => {
-    for (const args of [["pr", "ws/repo", "7"], ["pr-context", "ws/repo", "7"]]) {
+    for (const args of [
+      ["pr", "ws/repo", "7"],
+      ["pr-context", "ws/repo", "7"],
+    ]) {
       const r = await bb(args)
       assert.equal(r.code, 0, r.stderr)
       assert.match(r.stdout, new RegExp(`Source commit: ${FULL7}\\n`), args[0])
@@ -1100,7 +1218,10 @@ describe("CLI against a mock API", () => {
   })
 
   test("when the full sha cannot be looked up, the briefing says the hash is abbreviated", async () => {
-    for (const args of [["pr", "ws/repo", "8"], ["pr-context", "ws/repo", "8"]]) {
+    for (const args of [
+      ["pr", "ws/repo", "8"],
+      ["pr-context", "ws/repo", "8"],
+    ]) {
       const r = await bb(args)
       assert.equal(r.code, 0, r.stderr)
       assert.match(r.stdout, new RegExp(`Source commit: ${SHORT8} \\(abbreviated\\)`), args[0])
@@ -1199,6 +1320,7 @@ describe("CLI against a mock API", () => {
     const r = await bb(["pipeline-step-log", "ws/repo", "p", "s", "--tail", "100"])
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout, /FAILURE: boom/)
+    // eslint-disable-next-line no-control-regex -- checks that no escape character reaches the output
     assert.doesNotMatch(r.stdout, /\x1b/)
     assert.match(r.stdout, /showing last 100 chars of a \d+-byte log/)
     assert.equal(requested("/2.0/repositories/ws/repo/pipelines/%7Bp%7D/steps/%7Bs%7D/log").at(-1).range, "bytes=-400")
@@ -1259,7 +1381,10 @@ describe("CLI against a mock API", () => {
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout, new RegExp(`^- ${H_NEW.slice(0, 8)} Edit a\\n {4}Ana {2}2026-02-01 {2}\\(7 bytes\\)$`, "m"))
     // an author with a linked account is shown by display name, not by the raw "Name <email>"
-    assert.match(r.stdout, new RegExp(`^- ${H_OLD.slice(0, 8)} Add old-a\\n {4}Bo {2}2026-01-01 {2}\\(5 bytes, as src/old-a\\.ts\\)$`, "m"))
+    assert.match(
+      r.stdout,
+      new RegExp(`^- ${H_OLD.slice(0, 8)} Add old-a\\n {4}Bo {2}2026-01-01 {2}\\(5 bytes, as src/old-a\\.ts\\)$`, "m"),
+    )
     assert.doesNotMatch(r.stdout, /undefined|unknown|bo@example/)
     assert.equal(requested(`/2.0/repositories/ws/repo/commit/${H_NEW}`).length >= 1, true)
   })
@@ -1271,7 +1396,14 @@ describe("CLI against a mock API", () => {
   })
 
   test("file-history --json carries the full commit objects", async () => {
-    const r = await bb(["file-history", "ws/repo", "feature/x", "src/a.ts", "--select", "path,commit.message,commit.hash"])
+    const r = await bb([
+      "file-history",
+      "ws/repo",
+      "feature/x",
+      "src/a.ts",
+      "--select",
+      "path,commit.message,commit.hash",
+    ])
     assert.equal(r.code, 0, r.stderr)
     const v = JSON.parse(r.stdout).values
     assert.equal(v[0]["commit.message"], "Edit a\n\nlong body")
@@ -1300,11 +1432,17 @@ describe("CLI against a mock API", () => {
   })
 
   test("issues and issue explain that the issue tracker is gone (410)", async () => {
-    for (const args of [["issues", "ws/repo"], ["issue", "ws/repo", "1"]]) {
+    for (const args of [
+      ["issues", "ws/repo"],
+      ["issue", "ws/repo", "1"],
+    ]) {
       const r = await bb(args)
       assert.equal(r.code, 1, args.join(" "))
       assert.match(r.stderr, /410 Gone - CHANGE-3071 - Functionality has been deprecated/)
-      assert.match(r.stderr, /Hint: Bitbucket's native issue tracker has been removed.*issues and issue no longer work\. Use Jira/)
+      assert.match(
+        r.stderr,
+        /Hint: Bitbucket's native issue tracker has been removed.*issues and issue no longer work\. Use Jira/,
+      )
     }
   })
 
@@ -1325,10 +1463,22 @@ describe("CLI against a mock API", () => {
 
   test("a --path that matches nothing is named in the empty result (diff, diffstat, pr-diff, pr-diffstat)", async () => {
     const cases = [
-      [["pr-diffstat", "ws/repo", "1", "--path", "nope.ts"], /^No changes found for PR #1 in ws\/repo matching --path nope\.ts\. Check the paths against pr-diffstat without --path\./],
-      [["pr-diff", "ws/repo", "1", "--path", "nope.ts,also.ts"], /^No changes found for PR #1 matching --path nope\.ts,also\.ts\. Check the paths against pr-diffstat without --path\./],
-      [["diffstat", "ws/repo", "a..b", "--path", "nope.ts"], /^No changes found for a\.\.b in ws\/repo matching --path nope\.ts\. Check the paths against diffstat without --path\./],
-      [["diff", "ws/repo", "a..b", "--path", "nope.ts"], /^No changes found for a\.\.b matching --path nope\.ts\. Check the paths against diffstat without --path\./],
+      [
+        ["pr-diffstat", "ws/repo", "1", "--path", "nope.ts"],
+        /^No changes found for PR #1 in ws\/repo matching --path nope\.ts\. Check the paths against pr-diffstat without --path\./,
+      ],
+      [
+        ["pr-diff", "ws/repo", "1", "--path", "nope.ts,also.ts"],
+        /^No changes found for PR #1 matching --path nope\.ts,also\.ts\. Check the paths against pr-diffstat without --path\./,
+      ],
+      [
+        ["diffstat", "ws/repo", "a..b", "--path", "nope.ts"],
+        /^No changes found for a\.\.b in ws\/repo matching --path nope\.ts\. Check the paths against diffstat without --path\./,
+      ],
+      [
+        ["diff", "ws/repo", "a..b", "--path", "nope.ts"],
+        /^No changes found for a\.\.b matching --path nope\.ts\. Check the paths against diffstat without --path\./,
+      ],
     ]
     for (const [args, expected] of cases) {
       const r = await bb(args)
@@ -1338,7 +1488,8 @@ describe("CLI against a mock API", () => {
   })
 
   test("an empty range says which way round Bitbucket reads it (diff and diffstat)", async () => {
-    const hint = /Bitbucket reads <source>\.\.<dest> the reverse of git diff \(what <source> has that <dest> lacks\): if you expected changes, try "main\.\.empty"\.$/
+    const hint =
+      /Bitbucket reads <source>\.\.<dest> the reverse of git diff \(what <source> has that <dest> lacks\): if you expected changes, try "main\.\.empty"\.$/
     let r = await bb(["diffstat", "ws/repo", "empty..main"])
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout.trim(), /^No changes found for empty\.\.main in ws\/repo\. /)
@@ -1350,7 +1501,10 @@ describe("CLI against a mock API", () => {
 
   test("the range hint comes after the --path note, and a single commit or a PR gets none", async () => {
     let r = await bb(["diffstat", "ws/repo", "a..b", "--path", "nope.ts"])
-    assert.match(r.stdout, /matching --path nope\.ts\. Check the paths against diffstat without --path\. Bitbucket reads <source>\.\.<dest> the reverse.*try "b\.\.a"\./)
+    assert.match(
+      r.stdout,
+      /matching --path nope\.ts\. Check the paths against diffstat without --path\. Bitbucket reads <source>\.\.<dest> the reverse.*try "b\.\.a"\./,
+    )
     r = await bb(["diffstat", "ws/repo", "emptyc"])
     assert.equal(r.stdout.trim(), "No changes found for emptyc in ws/repo.")
     r = await bb(["pr-diffstat", "ws/repo", "9"])
@@ -1543,7 +1697,10 @@ describe("CLI against a mock API", () => {
     assert.match(r.stdout, /p1-0\.txt/)
     assert.doesNotMatch(r.stdout, /p2-0\.txt/)
     // the next link carries a token, not a number, so the footer must not advise --page N
-    assert.match(r.stdout, /\(more results — this endpoint pages with tokens, so --page N does not work: rerun with --all/)
+    assert.match(
+      r.stdout,
+      /\(more results — this endpoint pages with tokens, so --page N does not work: rerun with --all/,
+    )
     assert.doesNotMatch(r.stdout, /rerun with --page 2/)
     r = await bb(["browse", "ws/repo", "big", "--page", "2"])
     assert.equal(r.code, 1)
@@ -1565,6 +1722,7 @@ describe("CLI against a mock API", () => {
     assert.equal(r.code, 0, r.stderr)
     assert.deepEqual(requested(P).at(-1).query.getAll("state"), ["MERGED", "DECLINED"])
     r = await bb(["prs", "ws/repo", "--state", "ALL"])
+    assert.equal(r.code, 0, r.stderr)
     assert.deepEqual(requested(P).at(-1).query.getAll("state"), ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"])
     r = await bb(["prs", "ws/repo", "--state", "done"])
     assert.equal(r.code, 1)
@@ -1668,7 +1826,10 @@ describe("CLI against a mock API", () => {
   test("a huge binary file is not downloaded: the notice has its size and the server is cut off early", async () => {
     const r = await bb(["file", "ws/repo", "big.bin"])
     assert.equal(r.code, 0, r.stderr)
-    assert.equal(r.stdout.trim(), "File: big.bin @ main looks like a binary file (contains NUL bytes, 32.0 MB); content not shown.")
+    assert.equal(
+      r.stdout.trim(),
+      "File: big.bin @ main looks like a binary file (contains NUL bytes, 32.0 MB); content not shown.",
+    )
     const sent = sentBy[`/2.0/repositories/ws/repo/src/${SHA}/big.bin`]
     assert.ok(sent > 0 && sent < BIG_TOTAL / 2, `server wrote ${sent} of ${BIG_TOTAL} bytes`)
   })
@@ -1684,7 +1845,10 @@ describe("CLI against a mock API", () => {
     let r = await bb(["file", "ws/repo", "big.txt"])
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout, /^File: big\.txt @ main is 32\.0 MB, over the 10\.0 MB limit, so it was not downloaded\./)
-    assert.match(r.stdout, /set BITBUCKET_MAX_FILE_BYTES to a larger number of bytes in your environment \(not in the chat\)/)
+    assert.match(
+      r.stdout,
+      /set BITBUCKET_MAX_FILE_BYTES to a larger number of bytes in your environment \(not in the chat\)/,
+    )
     assert.ok(sentBy[`/2.0/repositories/ws/repo/src/${SHA}/big.txt`] < BIG_TOTAL / 2)
     r = await bb(["file", "ws/repo", "big.txt", "--json"])
     const j = JSON.parse(r.stdout)
@@ -1712,7 +1876,10 @@ describe("CLI against a mock API", () => {
       assert.equal(r.code, 0, `${root}: ${r.stderr}`)
       assert.match(r.stdout, /two\.txt/)
       assert.doesNotMatch(r.stderr, /Invalid path segment/)
-      assert.ok(seen.slice(before).some((s) => s.path === `/2.0/repositories/ws/repo/src/${SHA}/`), root)
+      assert.ok(
+        seen.slice(before).some((s) => s.path === `/2.0/repositories/ws/repo/src/${SHA}/`),
+        root,
+      )
     }
     // anywhere else a "." segment is still refused, so it cannot change which endpoint is hit
     const r = await bb(["browse", "ws/repo", "src/./x"])
@@ -1755,7 +1922,10 @@ describe("CLI against a mock API", () => {
   test("search-code --language with no matches says the names are the index's own (and without it, no such note)", async () => {
     let r = await bb(["search-code", "empty", "Ocean", "--language", "csharp"])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stdout, /Nothing matched with --language csharp: the names are the index's own \(for example c#; the match is not case-sensitive\)/)
+    assert.match(
+      r.stdout,
+      /Nothing matched with --language csharp: the names are the index's own \(for example c#; the match is not case-sensitive\)/,
+    )
     assert.match(r.stdout, /Retry without --language, or narrow with --extension \(for example --extension ts,tsx\)/)
     assert.match(r.stdout, /An empty result does not mean the code is absent/) // the branch note is still there
     r = await bb(["search-code", "empty", "Ocean"])
@@ -1774,6 +1944,7 @@ describe("CLI against a mock API", () => {
     assert.equal(r.code, 0, r.stderr)
     assert.equal(sent(), "Ocean repo:repo extension:ts extension:tsx")
     r = await bb(["search-code", "ws", "Ocean", "--extension", "tsx"]) // one extension is sent as before
+    assert.equal(r.code, 0, r.stderr)
     assert.equal(sent(), "Ocean extension:tsx")
     // a space would add search terms to the query instead of another extension, and a bare comma names nothing
     const before = seen.length
@@ -1791,7 +1962,10 @@ describe("CLI against a mock API", () => {
   test("search-code --extension with no matches says it is an exact match (and with hits, no such note)", async () => {
     let r = await bb(["search-code", "empty", "Ocean", "--extension", "ts"])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stdout, /Nothing matched with --extension ts: it is an exact match on the file extension, so ts does not cover tsx/)
+    assert.match(
+      r.stdout,
+      /Nothing matched with --extension ts: it is an exact match on the file extension, so ts does not cover tsx/,
+    )
     assert.match(r.stdout, /Add other extensions with a comma \(for example --extension ts,tsx\) or drop the filter/)
     assert.match(r.stdout, /An empty result does not mean the code is absent/) // the branch note is still there
     r = await bb(["search-code", "empty", "Ocean", "--extension", "js,jsx"])
@@ -1805,7 +1979,10 @@ describe("CLI against a mock API", () => {
   test("--pagelen above 100 is clamped with a warning, not silently", async () => {
     let r = await bb(["branches", "ws/repo", "--pagelen", "500"])
     assert.equal(r.code, 0, r.stderr.slice(0, 200))
-    assert.match(r.stderr, /Warning: --pagelen 500 is above Bitbucket's maximum of 100; using 100\. Use --all to read every page\./)
+    assert.match(
+      r.stderr,
+      /Warning: --pagelen 500 is above Bitbucket's maximum of 100; using 100\. Use --all to read every page\./,
+    )
     assert.equal(requested("/2.0/repositories/ws/repo/refs/branches").at(-1).query.get("pagelen"), "100")
     r = await bb(["branches", "ws/repo", "--pagelen", "100"])
     assert.doesNotMatch(r.stderr, /Warning: --pagelen/)
@@ -1820,7 +1997,10 @@ describe("CLI against a mock API", () => {
     assert.equal(sent(prs), "50")
     r = await bb(["prs", "ws/repo", "--pagelen", "100"])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stderr, /Warning: --pagelen 100 is above Bitbucket's maximum of 50 for prs; using 50\. Use --all to read every page\./)
+    assert.match(
+      r.stderr,
+      /Warning: --pagelen 100 is above Bitbucket's maximum of 50 for prs; using 50\. Use --all to read every page\./,
+    )
     assert.equal(sent(prs), "50")
     r = await bb(["prs", "ws/repo", "--pagelen", "50"])
     assert.doesNotMatch(r.stderr, /Warning: --pagelen/)
@@ -1831,6 +2011,7 @@ describe("CLI against a mock API", () => {
     assert.match(r.stderr, /maximum of 50 for pr-activity; using 50/)
     // the other list commands keep 100 (and keep the plain warning)
     r = await bb(["branches", "ws/repo", "--all"])
+    assert.equal(r.code, 0, r.stderr)
     assert.equal(sent("/2.0/repositories/ws/repo/refs/branches"), "100")
     r = await bb(["branches", "ws/repo", "--pagelen", "500"])
     assert.match(r.stderr, /maximum of 100; using 100\./)
@@ -1892,7 +2073,10 @@ describe("CLI against a mock API", () => {
   test("a bare repository name without BITBUCKET_WORKSPACE says how to make it work", async () => {
     let r = await bb(["branches", "oops"])
     assert.equal(r.code, 1)
-    assert.match(r.stderr, /Cannot parse repository "oops"\. Use <workspace>\/<repo> or a Bitbucket URL, or set BITBUCKET_WORKSPACE in your environment to use a bare repository name\./)
+    assert.match(
+      r.stderr,
+      /Cannot parse repository "oops"\. Use <workspace>\/<repo> or a Bitbucket URL, or set BITBUCKET_WORKSPACE in your environment to use a bare repository name\./,
+    )
     r = await bb(["branches", "oops"], { BITBUCKET_WORKSPACE: "ws" }) // with it set the name resolves (the mock has no such repo: 404, not a parse error)
     assert.doesNotMatch(r.stderr, /Cannot parse repository/)
   })
@@ -1900,7 +2084,10 @@ describe("CLI against a mock API", () => {
   test("a 404 on a PR command points at the PR id first; other commands keep the generic hint", async () => {
     let r = await bb(["pr", "ws/repo", "404"])
     assert.equal(r.code, 1)
-    assert.match(r.stderr, /Hint: Not found\. For a PR command the PR id is the likeliest typo \(the comment id, for pr-comment and comment-thread\); then check the workspace\/repo spelling/)
+    assert.match(
+      r.stderr,
+      /Hint: Not found\. For a PR command the PR id is the likeliest typo \(the comment id, for pr-comment and comment-thread\); then check the workspace\/repo spelling/,
+    )
     r = await bb(["pr-comment", "ws/repo", "1", "99999"])
     assert.match(r.stderr, /Hint: Not found\. For a PR command the PR id is the likeliest typo/)
     r = await bb(["branch", "ws/repo", "nope"])
@@ -1917,7 +2104,10 @@ describe("CLI against a mock API", () => {
   })
 
   test("pr and pr-context print the destination commit in full, so the old side of a change can be read", async () => {
-    for (const args of [["pr", "ws/repo", "7"], ["pr-context", "ws/repo", "7"]]) {
+    for (const args of [
+      ["pr", "ws/repo", "7"],
+      ["pr-context", "ws/repo", "7"],
+    ]) {
       const r = await bb(args)
       assert.equal(r.code, 0, r.stderr)
       assert.match(r.stdout, new RegExp(`Source commit: ${FULL7}\nDestination commit: ${FULLDEST7}\n`), args[0])
@@ -1925,13 +2115,17 @@ describe("CLI against a mock API", () => {
     // a hash that cannot be completed is said to be abbreviated; a PR that records none prints no line
     const r8 = await bb(["pr-context", "ws/repo", "8"])
     assert.match(r8.stdout, new RegExp(`Destination commit: ${DEST8} \\(abbreviated\\)`))
-    for (const args of [["pr", "ws/repo", "1"], ["pr-context", "ws/repo", "1"]]) {
+    for (const args of [
+      ["pr", "ws/repo", "1"],
+      ["pr-context", "ws/repo", "1"],
+    ]) {
       assert.doesNotMatch((await bb(args)).stdout, /Destination commit/, args[0])
     }
   })
 
   test("an unresolved ref says that a merged PR's branch is gone and prints the search that finds its source commit", async () => {
-    const find = /A branch is usually deleted when its PR is merged: find the PR with node bb\.mjs prs ws\/repo --state ALL --q 'source\.branch\.name="gone\/x"'/
+    const find =
+      /A branch is usually deleted when its PR is merged: find the PR with node bb\.mjs prs ws\/repo --state ALL --q 'source\.branch\.name="gone\/x"'/
     for (const args of [
       ["file", "ws/repo", "a.ts", "--ref", "gone/x"],
       ["browse", "ws/repo", "--ref", "gone/x"],
@@ -1956,11 +2150,19 @@ describe("CLI against a mock API", () => {
   })
 
   test("a range with an end that is gone blames the end, not a rewritten PR history", async () => {
-    for (const args of [["diffstat", "ws/repo", "gone..main"], ["diff", "ws/repo", "gone..main"], ["merge-base", "ws/repo", "gone..main"]]) {
+    for (const args of [
+      ["diffstat", "ws/repo", "gone..main"],
+      ["diff", "ws/repo", "gone..main"],
+      ["merge-base", "ws/repo", "gone..main"],
+    ]) {
       const r = await bb(args)
       assert.equal(r.code, 1, args[0])
       assert.match(r.stderr, /404 Not Found - The source or destination could not be found/, args[0])
-      assert.match(r.stderr, /Hint: Bitbucket cannot find a ref or commit that 'gone\.\.main' needs: check both ends for spelling\./, args[0])
+      assert.match(
+        r.stderr,
+        /Hint: Bitbucket cannot find a ref or commit that 'gone\.\.main' needs: check both ends for spelling\./,
+        args[0],
+      )
       assert.match(r.stderr, /source\.branch\.name="gone"'/, args[0])
       // main resolves, so it is not the end that is gone
       assert.doesNotMatch(r.stderr, /source\.branch\.name="main"/, args[0])
@@ -1976,14 +2178,20 @@ describe("CLI against a mock API", () => {
 
   test("a file that is gone at a ref says to read it before the deletion", async () => {
     const r = await bb(["file", "ws/repo", "sub/nope.txt"])
-    assert.match(r.stderr, /node bb\.mjs browse ws\/repo sub --ref main\nIf the file was deleted at this ref, read it at a commit before the deletion: the Destination commit that pr and pr-context print/)
+    assert.match(
+      r.stderr,
+      /node bb\.mjs browse ws\/repo sub --ref main\nIf the file was deleted at this ref, read it at a commit before the deletion: the Destination commit that pr and pr-context print/,
+    )
     const h = await bb(["file-history", "ws/repo", "feature/x", "src/none.ts"])
     assert.match(h.stderr, /If the file was deleted at this ref, read it at a commit before the deletion/)
   })
 
   test("a --path that is a directory says that only files match", async () => {
     let r = await bb(["pr-diff", "ws/repo", "1", "--path", "src/hooks"])
-    assert.match(r.stdout, /matching --path src\/hooks\. Check the paths against pr-diffstat without --path\. --path matches file paths only, so a directory matches nothing/)
+    assert.match(
+      r.stdout,
+      /matching --path src\/hooks\. Check the paths against pr-diffstat without --path\. --path matches file paths only, so a directory matches nothing/,
+    )
     // a path with an extension is a file: no note
     r = await bb(["pr-diff", "ws/repo", "1", "--path", "nope.ts"])
     assert.doesNotMatch(r.stdout, /file paths only/)
@@ -2049,7 +2257,11 @@ describe("CLI against a mock API", () => {
       r = await bb(["file", "ws/repo", "hidden.txt", ...flag])
       assert.equal(r.code, 0, r.stderr)
       assert.match(r.stdout, /ok‌‮/u, flag[0])
-      assert.match(r.stderr, /Note: this output contains invisible character\(s\) \(U\+200C, U\+202E, U\+E0048, U\+E0069\); JSON output, --raw included, prints them as they are/, flag[0])
+      assert.match(
+        r.stderr,
+        /Note: this output contains invisible character\(s\) \(U\+200C, U\+202E, U\+E0048, U\+E0069\); JSON output, --raw included, prints them as they are/,
+        flag[0],
+      )
     }
     assert.equal(JSON.parse(r.stdout).content.includes("‌"), true)
     // --raw feeds pipes: the bytes are untouched, the note still goes to stderr
@@ -2082,7 +2294,10 @@ describe("CLI against a mock API", () => {
     r = await bb(["file", "ws/repo", "lines-1455.txt", "--raw", "--limit", "1000"])
     assert.equal(r.stdout.trimEnd().split("\n").length, 1000)
     assert.doesNotMatch(r.stdout, /Warning/)
-    assert.match(r.stderr, /^Warning: --raw printed lines 1-1000 of 1455; 455 line\(s\) are not in this output, so a grep over it can miss matches\. Add --limit 1455 to read to the end, or continue with --start 1001\./)
+    assert.match(
+      r.stderr,
+      /^Warning: --raw printed lines 1-1000 of 1455; 455 line\(s\) are not in this output, so a grep over it can miss matches\. Add --limit 1455 to read to the end, or continue with --start 1001\./,
+    )
     // past the 10000 cap even the maximum stops short
     r = await bb(["file", "ws/repo", "lines-10500.txt", "--raw"])
     assert.equal(r.stdout.trimEnd().split("\n").length, 10000)
@@ -2101,7 +2316,11 @@ describe("CLI against a mock API", () => {
       r = await bb([cmd, "ws/repo", "10"])
       assert.equal(r.code, 1, cmd)
       assert.match(r.stderr, /404 Not Found - The source or destination could not be found for spec/, cmd)
-      assert.match(r.stderr, /Hint: Bitbucket cannot find a commit this diff needs\. On an old pull request that means a commit is gone/, cmd)
+      assert.match(
+        r.stderr,
+        /Hint: Bitbucket cannot find a commit this diff needs\. On an old pull request that means a commit is gone/,
+        cmd,
+      )
       assert.match(r.stderr, /pr, pr-activity and pr-statuses still work/, cmd)
       assert.doesNotMatch(r.stderr, /PR id is the likeliest typo/, cmd)
     }
@@ -2110,7 +2329,10 @@ describe("CLI against a mock API", () => {
   test("pr-context on such a PR shows the diffstat error with the hint and no doubled period (issue 2)", async () => {
     const r = await bb(["pr-context", "ws/repo", "10"])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stdout, /--- Diffstat ---\nUnavailable: .*7be7b3a3bd20\. Hint: Bitbucket cannot find a commit this diff needs/)
+    assert.match(
+      r.stdout,
+      /--- Diffstat ---\nUnavailable: .*7be7b3a3bd20\. Hint: Bitbucket cannot find a commit this diff needs/,
+    )
     assert.doesNotMatch(r.stdout, /\.\. Hint/)
   })
 
@@ -2119,7 +2341,10 @@ describe("CLI against a mock API", () => {
     let r = await bb(["pr-context", "ws/repo", "12"])
     assert.equal(r.code, 0, r.stderr)
     assert.equal(requested(stat).length, 5)
-    assert.match(r.stdout, /--- Diffstat ---\n2295 file\(s\) changed; first 500 summed: \+1000 -500\n\(WARNING: totals are partial: only the first 500 files were read of 2295, to keep this briefing quick\. For every file: pr-diffstat ws\/repo 12 --all --max-pages 23; to pick files, add --path a,b\)/)
+    assert.match(
+      r.stdout,
+      /--- Diffstat ---\n2295 file\(s\) changed; first 500 summed: \+1000 -500\n\(WARNING: totals are partial: only the first 500 files were read of 2295, to keep this briefing quick\. For every file: pr-diffstat ws\/repo 12 --all --max-pages 23; to pick files, add --path a,b\)/,
+    )
     r = await bb(["pr-context", "ws/repo", "12", "--full"])
     assert.match(r.stdout, /f499\.ts/)
     assert.doesNotMatch(r.stdout, /f500\.ts/)
@@ -2131,7 +2356,10 @@ describe("CLI against a mock API", () => {
 
   test("pr-diffstat names the total in its 'more exist' headline (issue 3)", async () => {
     let r = await bb(["pr-diffstat", "ws/repo", "12"])
-    assert.match(r.stdout, /^Diffstat for PR #12 in ws\/repo: first 100 file\(s\) of 2295 \(more exist\), \+200 -100 so far/)
+    assert.match(
+      r.stdout,
+      /^Diffstat for PR #12 in ws\/repo: first 100 file\(s\) of 2295 \(more exist\), \+200 -100 so far/,
+    )
     r = await bb(["pr-diffstat", "ws/repo", "12", "--all", "--max-pages", "3"])
     assert.match(r.stdout, /first 300 file\(s\) of 2295 \(more exist\)/)
     assert.match(r.stdout, /stopped at --max-pages/)
@@ -2190,14 +2418,20 @@ describe("CLI against a mock API", () => {
     let r = await bb(["repo", `${W}/src/main/two.txt`])
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout, /^Repository: ws\/repo/)
-    assert.equal(r.stderr, "Warning: the URL also names ref main and path two.txt, which repo does not use; only ws/repo was taken from it.\n")
+    assert.equal(
+      r.stderr,
+      "Warning: the URL also names ref main and path two.txt, which repo does not use; only ws/repo was taken from it.\n",
+    )
     r = await bb(["file", `${W}/commits/${SHA}`])
     assert.equal(r.code, 1)
     assert.match(r.stderr, /Warning: the URL also names commit a{40}, which file does not use/)
     assert.match(r.stderr, /Expected 1 more argument\(s\)/)
     // the root of a ref (no path) is nothing to report, and neither is a plain PR or repo URL
     r = await bb(["repo", `${W}/src/main/`])
-    assert.equal(r.stderr, "Warning: the URL also names ref main, which repo does not use; only ws/repo was taken from it.\n")
+    assert.equal(
+      r.stderr,
+      "Warning: the URL also names ref main, which repo does not use; only ws/repo was taken from it.\n",
+    )
     r = await bb(["pr", `${W}/pull-requests/1`])
     assert.equal(r.stderr, "")
   })
@@ -2206,7 +2440,10 @@ describe("CLI against a mock API", () => {
     let r = await bb(["file", `${W}/src/nope/x.txt`])
     assert.equal(r.code, 1)
     assert.match(r.stderr, /Could not resolve ref 'nope' in ws\/repo\./)
-    assert.match(r.stderr, /The ref was read from the URL as the segment after \/src\/; Bitbucket writes a "\/" inside a branch name as %2F/)
+    assert.match(
+      r.stderr,
+      /The ref was read from the URL as the segment after \/src\/; Bitbucket writes a "\/" inside a branch name as %2F/,
+    )
     // with --ref given there is nothing to explain
     r = await bb(["file", `${W}/src/nope/x.txt`, "--ref", "nope2"])
     assert.doesNotMatch(r.stderr, /read from the URL/)
@@ -2224,14 +2461,20 @@ describe("CLI against a mock API", () => {
     assert.match(r.stdout, /\(2026-02-01T08:36:30\.600\+00:00\): reviewers added: Eli\n/)
     assert.match(r.stdout, /\(2026-02-01T08:36:30\.300\+00:00\): state=OPEN title="PR 13"$/m)
     // an update with no source commit (PR 1's) reads as before
-    assert.match((await bb(["pr-activity", "ws/repo", "1"])).stdout, /state=OPEN title="PR 1" \(listed 2 times by Bitbucket\)/)
+    assert.match(
+      (await bb(["pr-activity", "ws/repo", "1"])).stdout,
+      /state=OPEN title="PR 1" \(listed 2 times by Bitbucket\)/,
+    )
   })
 
   test("file on a directory says so and gives the browse command, instead of printing the listing (run 9 issue 3)", async () => {
     let r = await bb(["file", "ws/repo", "dirx"])
     assert.equal(r.code, 1)
     assert.equal(r.stdout, "")
-    assert.match(r.stderr, /Error: dirx is a directory at ref 'main', not a file\. List it with: node bb\.mjs browse ws\/repo dirx --ref main/)
+    assert.match(
+      r.stderr,
+      /Error: dirx is a directory at ref 'main', not a file\. List it with: node bb\.mjs browse ws\/repo dirx --ref main/,
+    )
     r = await bb(["file", "ws/repo", "dirx", "--raw"])
     assert.equal(r.code, 1)
     // a file is unaffected
@@ -2259,11 +2502,17 @@ describe("CLI against a mock API", () => {
     let r = await bb(["prs", "ws/repo", "--state", "MERGED", "--q", 'author.display_name="Ian Flory"'])
     assert.equal(r.code, 1)
     assert.match(r.stderr, /400 Bad Request - Field "user\.\.display_name" does not support filtering/)
-    assert.match(r.stderr, /Hint: Bitbucket cannot filter on that field\. A person's display name is not filterable: use author\.account_id or reviewers\.account_id/)
+    assert.match(
+      r.stderr,
+      /Hint: Bitbucket cannot filter on that field\. A person's display name is not filterable: use author\.account_id or reviewers\.account_id/,
+    )
     assert.match(r.stderr, /references\/bbql\.md/)
     r = await bb(["prs", "ws/repo", "--state", "ALL", "--q", 'author.nickname="Ian Flory"'])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stdout, /^No pull requests found\.\n\(--q on a nickname matches that field exactly, and a person's nickname can differ from the name shown in this output\. Match on author\.account_id instead; read it with --select author\.account_id\.\)/)
+    assert.match(
+      r.stdout,
+      /^No pull requests found\.\n\(--q on a nickname matches that field exactly, and a person's nickname can differ from the name shown in this output\. Match on author\.account_id instead; read it with --select author\.account_id\.\)/,
+    )
     // other empty results, and a nickname search with hits, get no such note
     r = await bb(["prs", "ws/repo", "--state", "ALL", "--q", 'title ~ "nothing"'])
     assert.equal(r.stdout.trim(), "No pull requests found.")
@@ -2274,7 +2523,10 @@ describe("CLI against a mock API", () => {
   test("search-code with a list of extensions that finds nothing does not suggest the list it was given (run 9 nit)", async () => {
     const r = await bb(["search-code", "empty", "Ocean", "--extension", "ts,tsx"])
     assert.equal(r.code, 0, r.stderr)
-    assert.match(r.stdout, /Nothing matched with --extension ts,tsx: it is an exact match on the file extension, and every extension in that list was tried\. Check their spelling, or drop the filter\./)
+    assert.match(
+      r.stdout,
+      /Nothing matched with --extension ts,tsx: it is an exact match on the file extension, and every extension in that list was tried\. Check their spelling, or drop the filter\./,
+    )
     assert.doesNotMatch(r.stdout, /for example --extension ts,tsx/)
   })
 
@@ -2282,7 +2534,10 @@ describe("CLI against a mock API", () => {
     let r = await bb(["pr-diff", "ws/repo", "11"])
     assert.equal(r.code, 0, r.stderr)
     assert.equal(r.stdout.length, 252500 + 1) // the diff and the newline console.log adds: no warning text in it
-    assert.match(r.stderr, /^Warning: large diff, 252,500 characters \(2,500 lines\)\. Lock files and generated files are the usual cause: run pr-diffstat first and fetch only the files that matter with --path a,b/)
+    assert.match(
+      r.stderr,
+      /^Warning: large diff, 252,500 characters \(2,500 lines\)\. Lock files and generated files are the usual cause: run pr-diffstat first and fetch only the files that matter with --path a,b/,
+    )
     r = await bb(["diff", "ws/repo", "big..main"])
     assert.match(r.stderr, /run diffstat first/)
     // already narrowed with --path: do not send the reader back to --path
@@ -2373,7 +2628,10 @@ describe("CLI against a mock API", () => {
     const r = await bb(["get", "repositories/ws/repo/hang"], { ...FAST, BITBUCKET_REQUEST_TIMEOUT: "150" })
     assert.equal(r.code, 1)
     assert.match(r.stderr, /Request timed out after 150ms/)
-    assert.match(r.stderr, /Hint: Tried 3 times, 150 ms each\. For a slow network or a large response raise BITBUCKET_REQUEST_TIMEOUT \(milliseconds, set in your environment, not in the chat\)/)
+    assert.match(
+      r.stderr,
+      /Hint: Tried 3 times, 150 ms each\. For a slow network or a large response raise BITBUCKET_REQUEST_TIMEOUT \(milliseconds, set in your environment, not in the chat\)/,
+    )
     assert.equal(requested(`${R}/hang`).length, 3)
   })
 
