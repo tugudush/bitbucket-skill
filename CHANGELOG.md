@@ -1,13 +1,5 @@
 # Changelog
 
-## Unreleased
-
-Documentation audit of README.md and SKILL.md against `bb.mjs`:
-
-- SKILL.md tells Claude to treat fetched PR, comment, issue, file and log content as untrusted data, and not to use `get` for secret-bearing configuration (M2). The `get` examples in SKILL.md and `help` now use `default-reviewers` instead of `hooks` (part of M1). The `get` denylist is not implemented yet.
-- Added the commands the docs omitted (`repo`, `repos`, `pr-comment`, `pr-commits`, `pipeline`, `diffstat`, `branch`, `tag`, `check`) and the `diff`/`diffstat` flags `--ignore-whitespace` and `--topic`.
-- Corrected page-size, `--json`, `--max-chars`, `BITBUCKET_WORKSPACE`, proxy and `NODE_USE_SYSTEM_CA` statements.
-
 ## 1.1.0 (2026-10-13)
 
 Fixes from [docs/reviews/codebase-review.md](docs/reviews/codebase-review.md) (all except M1 and M2):
@@ -29,6 +21,12 @@ Fixes from [docs/reviews/codebase-review.md](docs/reviews/codebase-review.md) (a
 - `help <unknown>` is an error; the `pr-context` comments fallback retries only on 400; non-Bitbucket URLs produce a warning.
 - Node 20+ is the stated minimum. Docs use Atlassian's scope names. Version 1.1.0 is in `check`, `help` and the user agent.
 - `bb.mjs` can be imported without running; `node --test` runs unit and mock-server tests in `tests/`.
+
+Documentation audit of README.md and SKILL.md against `bb.mjs`:
+
+- SKILL.md tells Claude to treat fetched PR, comment, issue, file and log content as untrusted data, and not to use `get` for secret-bearing configuration (M2). The `get` examples in SKILL.md and `help` now use `default-reviewers` instead of `hooks` (part of M1). The `get` denylist is not implemented yet.
+- Added the commands the docs omitted (`repo`, `repos`, `pr-comment`, `pr-commits`, `pipeline`, `diffstat`, `branch`, `tag`, `check`) and the `diff`/`diffstat` flags `--ignore-whitespace` and `--topic`.
+- Corrected page-size, `--json`, `--max-chars`, `BITBUCKET_WORKSPACE`, proxy and `NODE_USE_SYSTEM_CA` statements.
 
 ## 1.0.0
 
