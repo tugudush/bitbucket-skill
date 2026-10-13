@@ -72,7 +72,7 @@ Big responses cost context and bury the answer, so shape them before reading:
 - **`--json`** gives the raw API payload; use it only when a field you need isn't in the text view.
 - **Lists are paged** (10 per page by default). Use `--pagelen 100`, `--page N`, or `--all` (follows every page, capped at 20 pages) when completeness matters, for instance when counting comments or looking for a particular reply. A `(more results …)` footer tells you the list is incomplete.
 - **Filter and sort server-side** with `--q` (Bitbucket query language) and `--sort`: `--q 'state="OPEN" AND author.nickname="dana"'`, `--sort -updated_on`. See `references/bbql.md` for syntax. This beats fetching everything and filtering locally.
-- **Diffs can be huge.** Look at the diffstat, then fetch diffs per file with `--path`, optionally with `--context N`. `--max-chars N` is a last-resort truncation.
+- **Diffs can be huge.** Look at the diffstat, then fetch diffs per file with `--path`, optionally with `--context N`. `--max-chars N` is a last-resort truncation (it keeps the start of the output, except for `pipeline-step-log`, where it keeps the end; for logs, prefer `--tail CHARS`).
 
 ## Workflows worth knowing
 
@@ -87,13 +87,14 @@ Big responses cost context and bury the answer, so shape them before reading:
 ## Gotchas
 
 - **Git Bash on Windows rewrites arguments that start with `/`** (it turns `/repositories/x` into `C:/Program Files/Git/repositories/x`). For `get`, omit the leading slash: `bb get repositories/acme/webapp/hooks`.
-- **Branch names containing `/`** (e.g. `feature/SSP-1024`) are fine for `file`, `browse`, `branch`, `commits --branch` because the script resolves refs to commit SHAs. In `diff`/`diffstat`/`merge-base` ranges they can be ambiguous; get the SHA via `branch` and use `sha1..sha2`.
+- **Branch names containing `/`** (e.g. `feature/SSP-1024`) are fine for `file`, `browse`, `commits --branch` (the script resolves the ref to a commit SHA first) and for `branch` (the name is URL-encoded). In `diff`/`diffstat`/`merge-base` ranges they can be ambiguous; get the SHA via `branch` and use `sha1..sha2`.
 - **Pipeline UUIDs** work with or without braces.
-- **Rate limits (429) and 5xx** are retried automatically with backoff (3 attempts). If it still fails, narrow the request instead of hammering.
+- **Rate limits (429) and 5xx** are retried automatically (3 attempts, honouring `Retry-After` up to 30 s; a longer wait fails immediately and says so). If it still fails, narrow the request instead of hammering.
 - **Network failures** (DNS, TLS, connection reset, proxy) are reported with the underlying cause, e.g. `Network error contacting api.bitbucket.org: ENOTFOUND`, plus a hint. Transient ones (reset, timeout, temporary DNS) are retried automatically. On a network that needs a proxy, Node ignores `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set too; `bb check` shows whether a proxy is configured and honoured.
+- **Unknown flags are rejected** (`Unknown flag --pagelenn. Did you mean --pagelen?`) and a value flag will not swallow a following `--flag`. If a value really starts with `--`, write `--flag=--value`. `bb help <command>` (or `-h`) lists the flags a command accepts.
 - **Errors** are printed on stderr with a `Hint:` line; exit code is non-zero. A 404 on something that should exist usually means missing credentials or a typo in workspace/repo; a 403 usually means the token lacks a read scope (repository, pullrequest, pipeline, issue).
 - Customer data can appear in PRs, logs and issues. Summarise what's needed to answer the question rather than dumping large raw payloads into the conversation or into files outside the task.
 
 ## Setup notes (for the human, not for every run)
 
-Requires Node 18+ (uses built-in `fetch`). Optional environment variables: `BITBUCKET_API_BASE` (default `https://api.bitbucket.org/2.0`), `BITBUCKET_REQUEST_TIMEOUT` (ms, default 30000). Behind a corporate proxy, set `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node 24+; for a TLS-inspecting proxy also `NODE_EXTRA_CA_CERTS` or `NODE_USE_SYSTEM_CA=1`) in your user environment.
+Requires Node 18+ (uses built-in `fetch`). Optional environment variables: `BITBUCKET_API_BASE` (default `https://api.bitbucket.org/2.0`; must be `https://`, plain `http://` is accepted only for localhost), `BITBUCKET_REQUEST_TIMEOUT` (ms, default 30000). Behind a corporate proxy, set `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node 24+; for a TLS-inspecting proxy also `NODE_EXTRA_CA_CERTS` or `NODE_USE_SYSTEM_CA=1`) in your user environment.
