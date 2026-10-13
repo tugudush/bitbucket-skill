@@ -16,6 +16,7 @@ Scope: every file in the skill (about 960 lines in total).
 - Offline checks only: `node --check` (syntax OK on Node v24.12.0), `bb help`, and the error paths that fail before any network call (unknown command, missing repo, MSYS-rewritten `get` path, flag typos). All behaved as described below.
 - **Nothing was run against the live Bitbucket API.** Findings that depend on Bitbucket's server behaviour are marked *(unverified)* and need a quick manual check.
 - A grep confirms the only HTTP method in the code is `GET` ([bb.mjs:137](../../scripts/bb.mjs#L137)).
+- Line numbers refer to `bb.mjs` as reviewed. The M2 and M3 fixes added about 60 lines to `bb.mjs`, so references below line 126 are now stale.
 
 ## Summary
 
@@ -24,7 +25,7 @@ This is a well-built skill. The design is small and coherent, the read-only and 
 The main weaknesses are:
 
 1. The `get` escape hatch is broader than the policy intent.
-2. A few robustness gaps in the HTTP layer (hung body reads, opaque network errors).
+2. A few robustness gaps in the HTTP layer (hung body reads and opaque network errors; both now fixed as M2 and M3).
 3. Silent error swallowing in `pr-context`.
 4. One documentation claim that the code does not back up.
 5. No tests.
@@ -82,22 +83,23 @@ The managed policy says secrets and credentials must not enter prompts. Today th
 - Or restrict `get` to an allowlist of read-only resource roots.
 - Change the `hooks` example in SKILL.md and the `get` help text to something harmless.
 
-#### M2. Request timeout does not cover reading the response body
+#### M2. Request timeout does not cover reading the response body — RESOLVED 2026-10-13
 
-`clearTimeout(timer)` runs at [bb.mjs:142](../../scripts/bb.mjs#L142), before `await res.text()` at line 143. If the server sends headers and then stalls, the body read has no deadline and the process hangs until the tool-level timeout. Large diffs and pipeline logs are the likely victims.
+`clearTimeout(timer)` ran before `await res.text()`. If the server sent headers and then stalled, the body read had no deadline and the process hung until the tool-level timeout. Large diffs and pipeline logs were the likely victims.
 
-**Suggestion:** move `clearTimeout` into a `finally` that runs after the body is fully read.
+**Resolution:** the early `clearTimeout` and the one in the `catch` were removed, and `clearTimeout(timer)` now runs in a `finally` after the body is fully read ([bb.mjs:142-143](../../scripts/bb.mjs#L142-L143), [bb.mjs:171-173](../../scripts/bb.mjs#L171-L173)). A stalled body now aborts at the deadline and goes through the existing timeout/retry path. Checked with `node --check` only; not tested against a live stalled response.
 
-#### M3. Network-level failures are opaque and not retried
+#### M3. Network-level failures are opaque and not retried — RESOLVED 2026-10-13
 
-- A DNS, TLS, connection-reset or proxy failure makes `fetch` throw `TypeError: fetch failed`. The real reason is in `e.cause`, but [bb.mjs:764-772](../../scripts/bb.mjs#L764-L772) prints only `e.message`. The user and Claude see `Error: fetch failed` with no clue.
-- These errors are rethrown at once ([bb.mjs:171](../../scripts/bb.mjs#L171)), so only timeouts and 429/5xx are retried. A transient `ECONNRESET` fails the command.
-- Node's built-in `fetch` does not honour `HTTP_PROXY`/`HTTPS_PROXY` by default. On a corporate network that needs a proxy this would show up as `fetch failed`. Recent Node releases can enable proxy support (`NODE_USE_ENV_PROXY=1`), but nothing in SKILL.md mentions it. *(unverified for this network)*
+- A DNS, TLS, connection-reset or proxy failure made `fetch` throw `TypeError: fetch failed`. The real reason is in `e.cause`, but `main()` printed only `e.message`, so the user and Claude saw `Error: fetch failed` with no clue.
+- These errors were rethrown at once, so only timeouts and 429/5xx were retried. A transient `ECONNRESET` failed the command.
+- Node's built-in `fetch` does not honour `HTTP_PROXY`/`HTTPS_PROXY` by default (`NODE_USE_ENV_PROXY=1` enables it), and nothing in SKILL.md mentioned it. *(still unverified for this network)*
 
-**Suggestion:**
-- Include `e.cause?.code`/`e.cause?.message` in the error output.
-- Treat `ECONNRESET`, `ETIMEDOUT` and `EAI_AGAIN` as retryable.
-- Add a line to the setup notes about proxies.
+**Resolution:**
+- New `NetworkError` class, built by `toNetworkError()` from the root cause (unwrapping `e.cause` and `AggregateError`). The message now reads like `Network error contacting host: ENOTFOUND: getaddrinfo ENOTFOUND host`, with a `Hint:` line chosen by `networkHint()` for DNS, untrusted-certificate (`NODE_EXTRA_CA_CERTS` / `NODE_USE_SYSTEM_CA=1`) and proxy cases.
+- `ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE` and the undici socket/timeout codes are retried with the same 3-attempt backoff. `ENOTFOUND`, `ECONNREFUSED` and certificate errors fail at once.
+- `bb check` now prints a `Proxy:` line (never the proxy value, which can contain credentials), and warns when a proxy variable is set without `NODE_USE_ENV_PROXY=1`. SKILL.md gotchas and setup notes document the proxy settings.
+- Checked offline against a local server that resets the first two connections (succeeded on the third after about 3 s), a refused port, an unresolvable host and the proxy warning. Not tested through a real corporate proxy.
 
 #### M4. SKILL.md claims branch names with `/` are handled for `commits --branch` and `branch`, but the code does not resolve refs there
 
@@ -205,7 +207,7 @@ The origin check compares against `BASE` itself ([bb.mjs:92-96](../../scripts/bb
 ## Recommended order of work
 
 1. **M1.** Tighten `get` (denylist or allowlist) and drop the `hooks` example.
-2. **M2 and M3.** Fix the timeout scope and surface `e.cause`, with retry on transient network codes.
+2. ~~**M2 and M3.** Timeout scope, and `e.cause` surfaced with retry on transient network codes.~~ Done.
 3. **M5.** Stop `pr-context` from reporting errors as empty results.
 4. **M4, L1 and the documentation table.** Fix the inaccurate `commits`/`branch` claim, add escaping helpers, and correct SKILL.md.
 5. **Tests.** Make `bb.mjs` importable and add `node --test` coverage for the pure helpers and the paging/retry logic.

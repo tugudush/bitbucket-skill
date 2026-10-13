@@ -90,9 +90,10 @@ Big responses cost context and bury the answer, so shape them before reading:
 - **Branch names containing `/`** (e.g. `feature/SSP-1024`) are fine for `file`, `browse`, `branch`, `commits --branch` because the script resolves refs to commit SHAs. In `diff`/`diffstat`/`merge-base` ranges they can be ambiguous; get the SHA via `branch` and use `sha1..sha2`.
 - **Pipeline UUIDs** work with or without braces.
 - **Rate limits (429) and 5xx** are retried automatically with backoff (3 attempts). If it still fails, narrow the request instead of hammering.
+- **Network failures** (DNS, TLS, connection reset, proxy) are reported with the underlying cause, e.g. `Network error contacting api.bitbucket.org: ENOTFOUND`, plus a hint. Transient ones (reset, timeout, temporary DNS) are retried automatically. On a network that needs a proxy, Node ignores `HTTPS_PROXY` unless `NODE_USE_ENV_PROXY=1` is set too; `bb check` shows whether a proxy is configured and honoured.
 - **Errors** are printed on stderr with a `Hint:` line; exit code is non-zero. A 404 on something that should exist usually means missing credentials or a typo in workspace/repo; a 403 usually means the token lacks a read scope (repository, pullrequest, pipeline, issue).
 - Customer data can appear in PRs, logs and issues. Summarise what's needed to answer the question rather than dumping large raw payloads into the conversation or into files outside the task.
 
 ## Setup notes (for the human, not for every run)
 
-Requires Node 18+ (uses built-in `fetch`). Optional environment variables: `BITBUCKET_API_BASE` (default `https://api.bitbucket.org/2.0`), `BITBUCKET_REQUEST_TIMEOUT` (ms, default 30000).
+Requires Node 18+ (uses built-in `fetch`). Optional environment variables: `BITBUCKET_API_BASE` (default `https://api.bitbucket.org/2.0`), `BITBUCKET_REQUEST_TIMEOUT` (ms, default 30000). Behind a corporate proxy, set `HTTPS_PROXY` and `NODE_USE_ENV_PROXY=1` (Node 24+; for a TLS-inspecting proxy also `NODE_EXTRA_CA_CERTS` or `NODE_USE_SYSTEM_CA=1`) in your user environment.

@@ -123,9 +123,68 @@ function explain(status) {
   }
 }
 
+/** A DNS, TLS, connection or proxy failure below HTTP (fetch threw before or while reading a response). */
+class NetworkError extends Error {
+  constructor(message, code, hint) {
+    super(message);
+    this.code = code;
+    this.hint = hint;
+  }
+}
+
+// Failures that usually clear up on their own; everything else (DNS not found, bad certificate) is not retried.
+const TRANSIENT_NET_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EPIPE',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+]);
+
+const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'];
+const proxyConfigured = () => PROXY_VARS.some(v => process.env[v]);
+const proxyIgnored = () => proxyConfigured() && !['1', 'true'].includes(process.env.NODE_USE_ENV_PROXY);
+
+/** Underlying error behind fetch's generic "fetch failed" TypeError (may sit inside an AggregateError). */
+function rootCause(e) {
+  let c = e.cause ?? e;
+  while (c.cause && !c.code) c = c.cause;
+  if (Array.isArray(c.errors) && c.errors.length) c = c.errors[0];
+  return c;
+}
+
+function networkHint(code) {
+  const hints = [];
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    hints.push('DNS lookup failed. Check the network connection and BITBUCKET_API_BASE.');
+  } else if (/CERT|SELF_SIGNED|UNABLE_TO_(GET|VERIFY)/.test(code || '')) {
+    hints.push('TLS certificate was not trusted, typically a corporate TLS-inspecting proxy. Set NODE_EXTRA_CA_CERTS to the company CA file (or NODE_USE_SYSTEM_CA=1) in the environment.');
+  }
+  if (proxyIgnored()) {
+    hints.push('A proxy variable is set but Node ignores it unless NODE_USE_ENV_PROXY=1 is also set in the environment.');
+  } else if (!hints.length) {
+    hints.push('Check connectivity, firewall and proxy settings (Node needs NODE_USE_ENV_PROXY=1 plus HTTPS_PROXY to use a proxy).');
+  }
+  return hints.join(' ');
+}
+
+function toNetworkError(e, url) {
+  const c = rootCause(e);
+  const code = c.code || e.code;
+  const reason = [code, c.message && c.message !== e.message ? c.message : ''].filter(Boolean).join(': ');
+  const host = new URL(url).host;
+  return new NetworkError(`Network error contacting ${host}: ${reason || e.message}`, code, networkHint(code));
+}
+
+/** Hint line for any error that has one, or ''. */
+const hintFor = e => (e instanceof NetworkError ? e.hint : explain(e.status));
+
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/** Low-level GET with timeout + retry on 429/5xx. Returns { body, contentType }. */
+/** Low-level GET with timeout + retry on 429/5xx and transient network errors. Returns { body, contentType }. */
 async function rawGet(url, accept = 'application/json') {
   assertAllowedUrl(url);
   let lastErr;
@@ -139,7 +198,7 @@ async function rawGet(url, accept = 'application/json') {
         headers: { Accept: accept, 'User-Agent': UA, ...authHeaders() },
         signal: ctrl.signal,
       });
-      clearTimeout(timer);
+      // Timer stays armed until the body is fully read, so a stalled body aborts too.
       const body = await res.text();
       if (!res.ok) {
         let detail = body.slice(0, 300);
@@ -159,7 +218,6 @@ async function rawGet(url, accept = 'application/json') {
       }
       return { body, contentType: res.headers.get('content-type') || '' };
     } catch (e) {
-      clearTimeout(timer);
       if (e.name === 'AbortError') {
         lastErr = new Error(`Request timed out after ${TIMEOUT}ms: ${url}`);
         if (attempt < RETRIES) {
@@ -168,7 +226,15 @@ async function rawGet(url, accept = 'application/json') {
         }
         throw lastErr;
       }
-      throw e;
+      if (e instanceof ApiError || !e.cause) throw e;
+      lastErr = toNetworkError(e, url);
+      if (TRANSIENT_NET_CODES.has(lastErr.code) && attempt < RETRIES) {
+        await sleep(2 ** (attempt - 1) * 1000);
+        continue;
+      }
+      throw lastErr;
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastErr || new Error('Request failed');
@@ -329,6 +395,7 @@ def('check', 'check', 'Verify configuration and credentials (never prints secret
     `BITBUCKET_EMAIL: ${process.env.BITBUCKET_EMAIL ? 'set' : 'NOT SET'}`,
     `BITBUCKET_API_TOKEN: ${process.env.BITBUCKET_API_TOKEN ? 'set' : 'NOT SET'}`,
     `BITBUCKET_WORKSPACE: ${process.env.BITBUCKET_WORKSPACE || '(not set)'}`,
+    `Proxy: ${proxyConfigured() ? (proxyIgnored() ? 'HTTPS_PROXY/HTTP_PROXY set but NODE_USE_ENV_PROXY=1 is missing, so Node ignores it' : 'set and honoured') : 'none configured'}`,
   ];
   if (!hasCreds()) {
     lines.push('', 'No credentials: only public repositories are reachable. Set the two variables in your OS/user environment (not in chat), then open a new terminal.');
@@ -339,7 +406,7 @@ def('check', 'check', 'Verify configuration and credentials (never prints secret
     lines.push('', `Authenticated as: ${who(u)} (${u.account_id || u.uuid || 'id unavailable'})`);
     return { data: { authenticated: true, user: u }, text: lines.join('\n') };
   } catch (e) {
-    lines.push('', `Auth check failed: ${e.message}`, explain(e.status));
+    lines.push('', `Auth check failed: ${e.message}`, hintFor(e));
     return { data: { authenticated: false }, text: lines.join('\n') };
   }
 });
@@ -762,12 +829,8 @@ async function main() {
 }
 
 main().catch(e => {
-  if (e instanceof ApiError) {
-    console.error(`Error: ${e.message}`);
-    const hint = explain(e.status);
-    if (hint) console.error(`Hint: ${hint}`);
-  } else {
-    console.error(`Error: ${e.message}`);
-  }
+  console.error(`Error: ${e.message}`);
+  const hint = hintFor(e);
+  if (hint) console.error(`Hint: ${hint}`);
   process.exit(1);
 });
