@@ -1,14 +1,14 @@
 # bitbucket-cloud skill
 
-A Claude Code skill that gives Claude **read-only** access to Bitbucket Cloud (bitbucket.org): pull requests, review comments, diffs, branches, tags, commits, pipelines and build logs, repository files and workspace code search. (Bitbucket removed its issue tracker, so `issues` and `issue` no longer work.)
+An agent skill that gives your AI coding assistant **read-only** access to Bitbucket Cloud (bitbucket.org): pull requests, review comments, diffs, branches, tags, commits, pipelines and build logs, repository files and workspace code search. (Bitbucket removed its issue tracker, so `issues` and `issue` no longer work.)
 
-It replaces the `bitbucket-mcp` server. Instead of a running MCP server, Claude calls one dependency-free Node script, [scripts/bb.mjs](scripts/bb.mjs), through the Bash tool.
+It works with any agent that supports the [Agent Skills](https://agentskills.io) format (a folder with a `SKILL.md`) and can run shell commands, including **Claude Code** and **GitHub Copilot in VS Code**. It replaces the `bitbucket-mcp` server. Instead of a running MCP server, the agent calls one dependency-free Node script, [scripts/bb.mjs](scripts/bb.mjs), through its terminal tool. The script itself knows nothing about any agent, so you can also run it by hand.
 
 Version: **1.2.12** (`bb check` and `bb help` print the version you have; see [CHANGELOG.md](CHANGELOG.md)).
 
 ## Read-only by design
 
-The script only ever issues HTTP `GET`. There is no command to comment, approve, merge, decline, create branches or trigger pipelines, and none can be added without changing the script. If you ask Claude for a write action, it will decline and offer to draft the text for you to post yourself.
+The script only ever issues HTTP `GET`. There is no command to comment, approve, merge, decline, create branches or trigger pipelines, and none can be added without changing the script. If you ask the agent for a write action, it will decline and offer to draft the text for you to post yourself.
 
 Credentials are read from environment variables, are never printed, and are only sent to `api.bitbucket.org` over HTTPS. The script refuses any other API host, and refuses to send credentials while `NODE_TLS_REJECT_UNAUTHORIZED=0` turns certificate checking off.
 
@@ -21,20 +21,24 @@ Credentials are read from environment variables, are never printed, and are only
 
 ### 1. Install the skill
 
-Claude Code loads personal skills from `~/.claude/skills/<skill-name>/`. This repository is meant to live at:
+Clone this repository into a skills folder that your agent reads. The folder must be named `bitbucket-cloud` and contain `SKILL.md`, `scripts/bb.mjs` and `references/`:
 
-```
-~/.claude/skills/bitbucket-cloud/        (Windows: C:\Users\<you>\.claude\skills\bitbucket-cloud)
-├── SKILL.md
-├── scripts/bb.mjs
-└── references/
-```
+| Agent                     | Personal (all your projects)         | Project (shared through the repo)           |
+| ------------------------- | ------------------------------------ | ------------------------------------------- |
+| Claude Code               | `~/.claude/skills/bitbucket-cloud/`  | `<project>/.claude/skills/bitbucket-cloud/` |
+| GitHub Copilot in VS Code | `~/.copilot/skills/bitbucket-cloud/` | `<project>/.github/skills/bitbucket-cloud/` |
 
 ```bash
 git clone <this-repo-url> ~/.claude/skills/bitbucket-cloud
 ```
 
-To share it with a team through a single project instead, put it under `<project>/.claude/skills/bitbucket-cloud/`. Restart Claude Code (or start a new session) so it picks the skill up.
+(Windows: `C:\Users\<you>\.claude\skills\bitbucket-cloud`.)
+
+**One install can serve both agents.** VS Code also reads `~/.claude/skills/` and `<project>/.claude/skills/`, so a clone under `.claude/skills/` is picked up by Claude Code and by Copilot. VS Code also accepts `.agents/skills/`, and the `chat.agentSkillsLocations` setting adds more folders. Check the current [VS Code Agent Skills documentation](https://code.visualstudio.com/docs/agent-customization/agent-skills) if your VS Code version behaves differently, as this area changes quickly.
+
+Restart Claude Code, or reload VS Code and start a new Copilot chat, so the skill is picked up. In Copilot, type `/skills` in Chat to open the Configure Skills menu and confirm it is listed. The folder name must match `name: bitbucket-cloud` in `SKILL.md`, otherwise VS Code silently skips the skill. Use agent mode, and expect the terminal tool to ask you to approve the `node …/bb.mjs` commands (VS Code has allow-list settings for terminal auto-approve if you want to permit them). On Windows its terminal is usually PowerShell, see the quoting note in [SKILL.md](SKILL.md).
+
+If your Copilot setup does not support skills, add a line to `.github/copilot-instructions.md` such as: "For Bitbucket Cloud questions, read `<path>/bitbucket-cloud/SKILL.md` and run its `scripts/bb.mjs`." The script works the same way.
 
 ### 2. Create an Atlassian API token
 
@@ -65,7 +69,7 @@ Set these in your own environment, **not in the chat, in a command line, or in a
 - **Windows:** Start menu → "Edit environment variables for your account" → add the variables under _User variables_.
 - **macOS / Linux:** export them from your shell profile (`~/.zshrc`, `~/.bashrc`) or a secrets manager.
 
-Then open a **new terminal** (and restart Claude Code) so the variables are visible.
+Then open a **new terminal** (and restart Claude Code, or fully quit and reopen VS Code) so the variables are visible to the agent's terminal.
 
 ### 4. Verify
 
@@ -77,7 +81,7 @@ node ~/.claude/skills/bitbucket-cloud/scripts/bb.mjs check
 
 ## Using it
 
-Just ask Claude in natural language. The skill triggers whenever you mention Bitbucket or paste a bitbucket.org URL. Examples:
+Just ask your agent in natural language. The skill triggers whenever you mention Bitbucket or paste a bitbucket.org URL (in Copilot you can also invoke it explicitly with `/bitbucket-cloud`). Examples:
 
 - "Review https://bitbucket.org/acme/webapp/pull-requests/42"
 - "What did reviewers say on PR 42 in acme/webapp?"
@@ -134,7 +138,7 @@ Flags on list commands only (marked `[list]` in `bb help`; elsewhere they are re
 - `--pagelen N`, `--page N`, `--all`: paging (`--page N` is refused by endpoints that page with tokens, namely `browse`, `pr-commits` and `file-history`; the footer says which to use; the API's 10 per page by default, 100 max, and 50 max for `prs` and `pr-activity`, where `--all` also reads 50 per page; some commands such as statuses, pipeline steps and diffstats already ask for 100, and so does `--all`, which follows up to 20 pages, raise or lower that with `--max-pages N`, which needs `--all`; `--all` cannot be combined with `--page`)
 - `--q` and `--sort`: server-side filtering and sorting; see [references/bbql.md](references/bbql.md). Not for `search-code` or `browse`, and not where Bitbucket accepts but ignores them: `commits`, `pr-commits`, `pr-activity`, `pr-diffstat` and `diffstat` reject both, and `pipelines` and `pipeline-steps` reject `--q` (their `--sort` works). A rejected flag tells you what to do instead; `bb help <command>` lists what each takes
 
-[references/mcp-tool-map.md](references/mcp-tool-map.md) maps each old `bb_*` MCP tool to its command. Full behaviour notes, workflows and gotchas for Claude are in [SKILL.md](SKILL.md).
+[references/mcp-tool-map.md](references/mcp-tool-map.md) maps each old `bb_*` MCP tool to its command. Full behaviour notes, workflows and gotchas for the agent are in [SKILL.md](SKILL.md).
 
 ## Troubleshooting
 
