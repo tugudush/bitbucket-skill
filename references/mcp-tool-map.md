@@ -12,7 +12,7 @@
 | `bb_browse_repository` | `bb browse <ws>/<repo> [path] [--ref R] [--limit N]` |
 | `bb_get_file_content` | `bb file <ws>/<repo> <path> [--ref R] [--start N] [--limit N]` |
 | `bb_get_file_history` | `bb file-history <ws>/<repo> <commit-or-branch> <path>` |
-| `bb_get_pull_requests` | `bb prs <ws>/<repo> [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED]` |
+| `bb_get_pull_requests` | `bb prs <ws>/<repo> [--state OPEN\|MERGED\|DECLINED\|SUPERSEDED]` (open only when `--state` is omitted) |
 | `bb_get_pull_request` | `bb pr <ws>/<repo> <id>` or `bb pr <url>` |
 | `bb_get_pull_request_comments` | `bb pr-comments <ws>/<repo> <id> [--all]` |
 | `bb_get_pull_request_comment` | `bb pr-comment <ws>/<repo> <id> <comment-id>` |
@@ -46,7 +46,7 @@
 Differences from the MCP:
 
 - `output_format=json` → `--json`; `output_format=toon` has no equivalent (use `--select` to keep output small); `filter` (JMESPath) → `--select` (dotted field list) and `--q` (server-side).
-- `--all` follows pagination everywhere; the MCP only did that internally for comment threads.
+- `--all` follows pagination on every list command (up to 20 pages, `--max-pages N` to raise it); the MCP only did that internally for comment threads. Non-list commands reject it.
 - Issue `state`/`kind` filters are sent as a proper `q` query (the MCP sent them as plain parameters, which Bitbucket ignores).
 - New: `check` (verify setup), `get` (generic read-only GET for any other v2.0 endpoint), `--q`/`--sort` on list commands.
 - Comment output includes comment ids and reply links, which the MCP text view omitted.

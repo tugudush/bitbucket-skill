@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * bb.mjs — read-only Bitbucket Cloud CLI (no dependencies, Node 18+).
+ * bb.mjs — read-only Bitbucket Cloud CLI (no dependencies, Node 20+, tested on 24).
  *
  * Skill-based replacement for the bitbucket-mcp server: same endpoints, same
  * read-only guarantee (only HTTP GET is ever issued), credentials come from the
@@ -14,14 +14,20 @@
  * Run `node bb.mjs help` for the command list.
  */
 
+import { realpathSync } from "node:fs"
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const VERSION = "1.1.0"
 const BASE = (
   process.env.BITBUCKET_API_BASE || "https://api.bitbucket.org/2.0"
 ).replace(/\/+$/, "")
-const TIMEOUT = Number(process.env.BITBUCKET_REQUEST_TIMEOUT) || 30000
+const DEFAULT_TIMEOUT = 30000
 const RETRIES = 3
 const MAX_PAGELEN = 100
+const MAX_REDIRECTS = 5
 const THREAD_MAX_PAGES = 1000 // comment-thread must see every comment; far above the default --max-pages
-const UA = "bitbucket-cloud-skill/1.0"
+const UA = `bitbucket-cloud-skill/${VERSION}`
 
 // ---------------------------------------------------------------- utilities
 
@@ -40,27 +46,27 @@ const BOOLEAN_FLAGS = new Set([
   "help",
 ])
 
-// Accepted by every command (output shaping and paging); a command's own flags come from its usage string.
-const GLOBAL_FLAGS = [
-  "json",
-  "select",
-  "max-chars",
-  "help",
-  "page",
-  "pagelen",
-  "all",
-  "max-pages",
-  "q",
-  "sort",
-]
+// Accepted by every command; a command's own flags come from its usage string.
+const OUTPUT_FLAGS = ["json", "select", "max-chars", "help"]
+// Accepted only by list commands (def(..., { paged: true })); elsewhere they would be silently ignored.
+const PAGING_FLAGS = ["page", "pagelen", "all", "max-pages"]
+const QUERY_FLAGS = ["q", "sort"]
 
 function parseArgs(argv) {
   const pos = []
   const flags = {}
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === "-h") {
+    if (a === "--") {
+      pos.push(...argv.slice(i + 1))
+      break
+    } else if (a === "-h") {
       flags.help = true
+    } else if (/^-[A-Za-z]/.test(a)) {
+      // Treating "-r main" as two arguments would drop the option and give a plausible wrong result.
+      die(
+        `Unknown option ${a}. Flags use two dashes (e.g. --ref). To pass an argument that starts with "-", put it after "--".`,
+      )
     } else if (a.startsWith("--") && a.length > 2) {
       const eq = a.indexOf("=")
       const key = eq === -1 ? a.slice(2) : a.slice(2, eq)
@@ -100,14 +106,26 @@ function editDistance(a, b) {
   return prev[b.length]
 }
 
+const usageFlags = (usage) =>
+  (usage.match(/--[a-z][a-z-]*/g) || []).map((f) => f.slice(2))
+
 /** Reject flags the command does not know (a typo would otherwise be ignored and give a plausible wrong result). */
 function checkFlags(command, flags) {
+  const own = usageFlags(command.usage)
   const known = new Set([
-    ...GLOBAL_FLAGS,
-    ...(command.usage.match(/--[a-z][a-z-]*/g) || []).map((f) => f.slice(2)),
+    ...OUTPUT_FLAGS,
+    ...(command.paged ? PAGING_FLAGS : []),
+    ...(command.query ? QUERY_FLAGS : []),
+    ...own,
   ])
   for (const key of Object.keys(flags)) {
     if (known.has(key)) continue
+    if (PAGING_FLAGS.includes(key) || QUERY_FLAGS.includes(key))
+      die(
+        command.paged
+          ? `--${key} is not supported by ${command.name} (the endpoint does not take BBQL filters or sorting).`
+          : `--${key} does not apply to ${command.name}: it is not a list command, so the flag would be ignored.`,
+      )
     const near = [...known]
       .filter((k) => editDistance(key, k) <= 2)
       .sort((a, b) => editDistance(key, a) - editDistance(key, b))[0]
@@ -117,14 +135,61 @@ function checkFlags(command, flags) {
   }
 }
 
-const num = (v) => {
+/** How many positional arguments a usage string allows: its <…> and [path]-style tokens, first form only. */
+function maxArgs(usage) {
+  const tokens = []
+  let cur = ""
+  let depth = 0
+  for (const ch of usage) {
+    if (ch === "<" || ch === "[") depth++
+    else if (ch === ">" || ch === "]") depth--
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) tokens.push(cur)
+      cur = ""
+    } else cur += ch
+  }
+  if (cur) tokens.push(cur)
+  const end = tokens.indexOf("|")
+  return (end === -1 ? tokens : tokens.slice(0, end))
+    .slice(1)
+    .filter(
+      (t) => !t.startsWith("[--") && (t.includes("<") || t.startsWith("[")),
+    ).length
+}
+
+/** Reject leftover positional arguments, which would otherwise be ignored (e.g. "commits ws/repo develop"). */
+function checkArgs(command, pos) {
+  const max = maxArgs(command.usage)
+  if (pos.length <= max) return
+  die(unexpectedArg(command, pos[max]))
+}
+
+function unexpectedArg(command, arg) {
+  const flag = ["ref", "branch"].find((f) =>
+    usageFlags(command.usage).includes(f),
+  )
+  return `Unexpected argument "${arg}".${flag ? ` Did you mean --${flag} ${arg}?` : ""} See: node bb.mjs help ${command.name}`
+}
+
+/** Whole number >= min (flags, ids, env settings); anything else is an error rather than a surprising request. */
+function int(v, label, min = 1) {
   if (v === undefined || v === "") return undefined
   const n = Number(v)
-  if (!Number.isFinite(n)) die(`Expected a number, got "${v}"`)
+  if (!Number.isInteger(n) || n < min)
+    die(
+      `${label} must be ${min === 0 ? "a whole number (0 or more)" : "a positive whole number"}, got "${v}".`,
+    )
   return n
 }
 
-const enc = encodeURIComponent
+// "." and ".." are not encoded by encodeURIComponent (nor is "%2e" safe), so URL parsing would collapse them
+// and the request would reach a different endpoint.
+function enc(s) {
+  const v = String(s)
+  if (v === "." || v === "..")
+    die(`Invalid path segment "${v}": "." and ".." are not allowed.`)
+  return encodeURIComponent(v)
+}
 const encPath = (p) => p.split("/").map(enc).join("/")
 // Quote a value for a BBQL string literal: escape backslashes first, then quotes.
 const bbqlString = (s) =>
@@ -144,8 +209,45 @@ const short = (h) => (h || "").slice(0, 8)
 const who = (u) => u?.display_name || u?.nickname || u?.raw || "unknown"
 const commitAuthor = (c) =>
   c?.author?.user?.display_name || c?.author?.raw || "unknown"
+// CI logs are full of colour codes: they cost tokens and make quoted error lines hard to read.
+const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+const stripAnsi = (s) => s.replace(ANSI, "")
+
+// ---------------------------------------------------------------- configuration
+
+// Plain http is only accepted for loopback hosts (local mock servers), never for a real API.
+const isLoopback = (h) =>
+  h === "localhost" || h === "[::1]" || /^127(\.\d{1,3}){3}$/.test(h)
+
+let apiBaseUrl
+/** BITBUCKET_API_BASE, parsed and checked once: it must be a valid https:// URL (http only for loopback). */
+function apiBase() {
+  if (apiBaseUrl) return apiBaseUrl
+  let u
+  try {
+    u = new URL(BASE)
+  } catch {
+    die(
+      `BITBUCKET_API_BASE "${BASE}" is not a valid URL. Unset it, or use e.g. https://api.bitbucket.org/2.0.`,
+    )
+  }
+  if (u.protocol !== "https:" && !isLoopback(u.hostname))
+    die(
+      `Refusing to use BITBUCKET_API_BASE ${u.origin}: it must be an https:// URL, because credentials are sent with every request.`,
+    )
+  return (apiBaseUrl = u)
+}
+
+let timeoutValue
+function timeoutMs() {
+  timeoutValue ??=
+    int(process.env.BITBUCKET_REQUEST_TIMEOUT, "BITBUCKET_REQUEST_TIMEOUT") ??
+    DEFAULT_TIMEOUT
+  return timeoutValue
+}
 
 function buildUrl(path, params = {}) {
+  apiBase()
   const u = new URL(BASE + path)
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== "")
@@ -169,22 +271,11 @@ function authHeaders() {
 const hasCreds = () =>
   Boolean(process.env.BITBUCKET_EMAIL && process.env.BITBUCKET_API_TOKEN)
 
-// Plain http is only accepted for loopback hosts (local mock servers), never for a real API.
-const isLoopback = (h) =>
-  h === "localhost" || h === "[::1]" || /^127(\.\d{1,3}){3}$/.test(h)
-
 // Credentials are only ever sent to the configured API origin, and only over HTTPS.
 function assertAllowedUrl(url) {
-  const base = new URL(BASE)
-  if (base.protocol !== "https:" && !isLoopback(base.hostname)) {
-    die(
-      `Refusing to use BITBUCKET_API_BASE ${base.origin}: it must be an https:// URL, because credentials are sent with every request.`,
-    )
-  }
-  if (new URL(url).origin !== base.origin) {
-    die(
-      `Refusing to call ${new URL(url).origin}: only ${base.origin} is allowed.`,
-    )
+  const { origin } = apiBase()
+  if (new URL(url).origin !== origin) {
+    die(`Refusing to call ${new URL(url).origin}: only ${origin} is allowed.`)
   }
 }
 
@@ -206,7 +297,7 @@ function explain(status) {
         ? "Credentials were rejected. The API token may be expired or lack Bitbucket read scopes."
         : "No credentials configured: set BITBUCKET_EMAIL and BITBUCKET_API_TOKEN in the environment (outside the chat)."
     case 403:
-      return "Access denied. The token may be missing a read scope (repository, pullrequest, pipeline, issue) or you lack access to this resource."
+      return "Access denied. The token may be missing a read scope (read:repository:bitbucket, read:pullrequest:bitbucket, read:pipeline:bitbucket, read:issue:bitbucket, read:workspace:bitbucket) or you lack access to this resource."
     case 404:
       return hasCreds()
         ? "Not found. Check workspace/repo/ref spelling and that your account can see it."
@@ -289,8 +380,8 @@ function toNetworkError(e, url) {
   )
 }
 
-/** Hint line for any error that has one, or ''. */
-const hintFor = (e) => (e instanceof NetworkError ? e.hint : explain(e.status))
+/** Hint line for any error that has one, or ''. A command can set e.hint to replace the generic status hint. */
+const hintFor = (e) => e.hint || explain(e.status)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -319,20 +410,64 @@ function parseJson(body, contentType, url) {
   }
 }
 
-/** Low-level GET with timeout + retry on 429/5xx and transient network errors. Returns { body, contentType }. */
-async function rawGet(url, accept = "application/json") {
+/**
+ * GET that follows redirects itself so every hop is checked: same-origin hops keep credentials; another
+ * origin is refused unless the caller allows it (foreignRedirects), and then it must be HTTPS and gets no
+ * credentials. Relying on fetch's own following would leave both to the runtime.
+ */
+async function fetchChecked(url, { accept, headers, foreignRedirects }, signal) {
+  const { origin } = apiBase()
+  let target = url
+  for (let hop = 0; ; hop++) {
+    const own = new URL(target).origin === origin
+    const res = await fetch(target, {
+      method: "GET", // read-only by construction: no other method is ever used
+      redirect: "manual",
+      headers: {
+        Accept: accept,
+        "User-Agent": UA,
+        ...headers,
+        ...(own ? authHeaders() : {}),
+      },
+      signal,
+    })
+    const location = res.headers.get("location")
+    if (res.status < 300 || res.status > 399 || !location) return res
+    await res.body?.cancel().catch(() => {})
+    if (hop >= MAX_REDIRECTS) die(`Too many redirects starting from ${url}`)
+    const next = new URL(location, target)
+    if (next.origin !== origin) {
+      if (!foreignRedirects)
+        die(
+          `Refusing to follow a redirect to ${next.origin}: only ${origin} is allowed.`,
+        )
+      if (next.protocol !== "https:" && !isLoopback(next.hostname))
+        die(`Refusing to follow a redirect to non-HTTPS ${next.origin}.`)
+    }
+    target = next.href
+  }
+}
+
+/**
+ * Low-level GET with timeout + retry on 429/5xx and transient network errors.
+ * Returns { body, contentType, status, headers }.
+ */
+async function rawGet(
+  url,
+  { accept = "application/json", headers = {}, foreignRedirects = false } = {},
+) {
   assertAllowedUrl(url)
+  const timeout = timeoutMs()
   let lastErr
   for (let attempt = 1; attempt <= RETRIES; attempt++) {
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT)
+    const timer = setTimeout(() => ctrl.abort(), timeout)
     try {
-      const res = await fetch(url, {
-        method: "GET", // read-only by construction: no other method is ever used
-        redirect: "follow",
-        headers: { Accept: accept, "User-Agent": UA, ...authHeaders() },
-        signal: ctrl.signal,
-      })
+      const res = await fetchChecked(
+        url,
+        { accept, headers, foreignRedirects },
+        ctrl.signal,
+      )
       // Timer stays armed until the body is fully read, so a stalled body aborts too.
       const body = await res.text()
       if (!res.ok) {
@@ -358,10 +493,15 @@ async function rawGet(url, accept = "application/json") {
         }
         throw err
       }
-      return { body, contentType: res.headers.get("content-type") || "" }
+      return {
+        body,
+        contentType: res.headers.get("content-type") || "",
+        status: res.status,
+        headers: res.headers,
+      }
     } catch (e) {
       if (e.name === "AbortError") {
-        lastErr = new Error(`Request timed out after ${TIMEOUT}ms: ${url}`)
+        lastErr = new Error(`Request timed out after ${timeout}ms: ${url}`)
         if (attempt < RETRIES) {
           await sleep(2 ** (attempt - 1) * 1000)
           continue
@@ -387,15 +527,17 @@ const getJson = async (url) => {
   return parseJson(body, contentType, url)
 }
 const getText = async (url, accept = "text/plain") =>
-  (await rawGet(url, accept)).body
+  (await rawGet(url, { accept })).body
 
 /** One page, or every page with --all (capped), of a list endpoint. */
 async function getList(ctx, path, params = {}) {
   const { flags } = ctx
   const all = Boolean(flags.all)
-  const page = num(flags.page)
+  const page = int(flags.page, "--page")
   const pagelen =
-    num(flags.pagelen) ?? params.pagelen ?? (all ? MAX_PAGELEN : undefined)
+    int(flags.pagelen, "--pagelen") ??
+    params.pagelen ??
+    (all ? MAX_PAGELEN : undefined)
   const extra = {
     ...params,
     pagelen: pagelen && Math.min(pagelen, MAX_PAGELEN),
@@ -405,7 +547,7 @@ async function getList(ctx, path, params = {}) {
   if (flags.sort) extra.sort = flags.sort
   let url = buildUrl(path, extra)
   if (!all) return getJson(url)
-  const maxPages = num(flags["max-pages"]) ?? 20
+  const maxPages = int(flags["max-pages"], "--max-pages") ?? 20
   const values = []
   let size
   let pages = 0
@@ -432,6 +574,11 @@ function parseRepoToken(tok) {
     )
   if (/^https?:\/\//.test(tok)) {
     const u = new URL(tok)
+    // Nothing is sent to that host, but a GitHub (or other) URL would otherwise be read as ws/repo silently.
+    if (!/(^|\.)bitbucket\.org$/i.test(u.hostname) && u.host !== apiBase().host)
+      console.error(
+        `Warning: ${u.host} is not bitbucket.org; reading workspace/repo from the URL path anyway.`,
+      )
     let parts = u.pathname.split("/").filter(Boolean)
     // API form: /2.0/repositories/<ws>/<repo>/... (without this, "2.0" would parse as the workspace)
     if (parts[0] === "2.0") {
@@ -475,13 +622,15 @@ function prCtx(ctx, extra = 0) {
   let id = t.prId
   let rest = t.rest
   if (id === undefined) {
-    id = num(rest[0])
+    id = int(rest[0], "Pull request id")
     rest = rest.slice(1)
   }
   if (!id)
     die('Missing pull request id (pass "<ws>/<repo> <id>" or the PR URL).')
   if (rest.length < extra)
     die(`Missing argument. See: node bb.mjs help ${ctx.cmd}`)
+  // main's count assumes "<ws>/<repo> <id>"; a PR URL carries the id, so it allows one argument fewer.
+  if (rest.length > extra) die(unexpectedArg(C[ctx.cmd], rest[extra]))
   return { ...t, id, rest, pr: `${t.base}/pullrequests/${id}` }
 }
 
@@ -517,25 +666,27 @@ async function resolveRef(base, ref) {
 
 // ---------------------------------------------------------------- formatters
 
-const listHeader = (title, r) =>
-  `${title} (${r.size ?? r.values.length} total):\n`
 function pageNote(r, ctx) {
   if (r.truncated)
     return "\n(stopped at --max-pages; more results exist — raise --max-pages or narrow with --q)"
   if (r.next)
-    return `\n(more results — rerun with --page ${(num(ctx.flags.page) || 1) + 1} or --all)`
+    return `\n(more results — rerun with --page ${(int(ctx.flags.page, "--page") || 1) + 1} or --all)`
   return ""
 }
 const none = (what) => `No ${what} found.`
 
-function statusLines(values) {
-  return values
-    .map(
-      (s) =>
-        `- ${s.state}  ${s.name || s.key}${s.description ? ` — ${s.description}` : ""}${s.url ? `\n    ${s.url}` : ""}`,
-    )
-    .join("\n")
+/** "Title (N total):" + one entry per item + the paging footer, or "No <what> found." The footer cannot be forgotten. */
+function listText(title, r, ctx, fmt, what, sep = "\n") {
+  if (!r.values?.length) return none(what)
+  const count = r.size != null ? ` (${r.size} total)` : ""
+  return `${title}${count}:\n${r.values.map(fmt).join(sep)}${pageNote(r, ctx)}`
 }
+
+const commitLine = (c) =>
+  `- ${short(c.hash)} ${first(c.message)}\n    ${commitAuthor(c)}  ${c.date}`
+
+const statusLine = (s) =>
+  `- ${s.state}  ${s.name || s.key}${s.description ? ` — ${s.description}` : ""}${s.url ? `\n    ${s.url}` : ""}`
 
 function diffstatText(label, r) {
   if (!r.values?.length) return `No changes found for ${label}.`
@@ -573,11 +724,13 @@ function duration(sec) {
 }
 
 // ---------------------------------------------------------------- commands
-// Each command: { usage, summary, run(ctx) -> { data, text } }
+// Each command: { usage, summary, run(ctx) -> { data, text, keepTail?, exitCode? } }
+// paged: the command reads a list endpoint with getList, so it takes the paging flags;
+// query: it also takes --q/--sort (default: same as paged).
 
 const C = {}
-const def = (name, usage, summary, run) =>
-  (C[name] = { name, usage, summary, run })
+const def = (name, usage, summary, run, { paged = false, query = paged } = {}) =>
+  (C[name] = { name, usage, summary, run, paged, query })
 
 // --- setup / meta
 def(
@@ -586,6 +739,7 @@ def(
   "Verify configuration and credentials (never prints secrets)",
   async () => {
     const lines = [
+      `bb.mjs version: ${VERSION}`,
       `API base: ${BASE}`,
       `BITBUCKET_EMAIL: ${process.env.BITBUCKET_EMAIL ? "set" : "NOT SET"}`,
       `BITBUCKET_API_TOKEN: ${process.env.BITBUCKET_API_TOKEN ? "set" : "NOT SET"}`,
@@ -607,8 +761,23 @@ def(
       )
       return { data: { authenticated: true, user: u }, text: lines.join("\n") }
     } catch (e) {
+      // 403 means the credentials were accepted; only the account endpoint is out of the token's scope.
+      if (e instanceof ApiError && e.status === 403) {
+        lines.push(
+          "",
+          "Credentials accepted, but the token cannot read your account (needs the read:user:bitbucket scope). Repository commands may still work.",
+        )
+        return {
+          data: { authenticated: true, account_read: false },
+          text: lines.join("\n"),
+        }
+      }
       lines.push("", `Auth check failed: ${e.message}`, hintFor(e))
-      return { data: { authenticated: false }, text: lines.join("\n") }
+      return {
+        data: { authenticated: false },
+        text: lines.join("\n"),
+        exitCode: 1,
+      }
     }
   },
 )
@@ -616,7 +785,7 @@ def(
 def(
   "get",
   "get <api-path-or-url>",
-  "Generic read-only GET for any v2.0 endpoint not covered below, e.g. get repositories/ws/repo/hooks (no leading slash: Git Bash on Windows rewrites it). JSON or text is auto-detected.",
+  "Generic read-only GET for any v2.0 endpoint not covered below, e.g. get repositories/ws/repo/default-reviewers (no leading slash: Git Bash on Windows rewrites it). JSON or text is auto-detected.",
   async (ctx) => {
     const target = ctx.pos[0] || die("Missing API path or URL.")
     if (/^[A-Za-z]:[\\/]/.test(target))
@@ -626,7 +795,7 @@ def(
     const url = /^https?:\/\//.test(target)
       ? target
       : BASE + (target.startsWith("/") ? target : `/${target}`)
-    const { body, contentType } = await rawGet(url, "*/*")
+    const { body, contentType } = await rawGet(url, { accept: "*/*" })
     if (contentType.includes("json")) {
       const data = parseJson(body, contentType, url)
       return { data, text: JSON.stringify(data, null, 2) }
@@ -644,18 +813,17 @@ def(
     // GET /workspaces now 404s. /user/workspaces returns workspace_access objects whose nested
     // workspace has slug and uuid but no name; `workspace <slug>` gives the full details.
     const r = await getList(ctx, "/user/workspaces")
-    const text = r.values.length
-      ? listHeader("Workspaces", r) +
-        r.values
-          .map(
-            (v) =>
-              `- ${v.workspace.slug}${v.administrator ? "  (administrator)" : ""}`,
-          )
-          .join("\n") +
-        pageNote(r, ctx)
-      : none("workspaces")
+    const text = listText(
+      "Workspaces",
+      r,
+      ctx,
+      (v) =>
+        `- ${v.workspace.slug}${v.administrator ? "  (administrator)" : ""}`,
+      "workspaces",
+    )
     return { data: r, text }
   },
+  { paged: true },
 )
 
 def("workspace", "workspace <workspace>", "Workspace details", async (ctx) => {
@@ -706,13 +874,10 @@ def(
     )
     return {
       data: r,
-      text: r.values.length
-        ? listHeader("Repositories", r) +
-          r.values.map(repoLine).join("\n") +
-          pageNote(r, ctx)
-        : none("repositories"),
+      text: listText("Repositories", r, ctx, repoLine, "repositories"),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -729,13 +894,16 @@ def(
     })
     return {
       data: r,
-      text: r.values.length
-        ? listHeader(`Repositories matching "${query}"`, r) +
-          r.values.map(repoLine).join("\n") +
-          pageNote(r, ctx)
-        : none("matching repositories"),
+      text: listText(
+        `Repositories matching "${query}"`,
+        r,
+        ctx,
+        repoLine,
+        "matching repositories",
+      ),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -770,34 +938,32 @@ def(
     const t = repoCtx(ctx)
     const path = (t.rest[0] || "").replace(/^\/+|\/+$/g, "")
     const ref = ctx.flags.ref || (await defaultBranch(t.base))
-    const limit = Math.min(num(ctx.flags.limit) ?? 50, MAX_PAGELEN)
+    const limit = Math.min(int(ctx.flags.limit, "--limit") ?? 50, MAX_PAGELEN)
+    // The root too goes through /src/{sha}/: bare /src redirects to the main branch and its "at" is undocumented.
+    const sha = await resolveRef(t.base, ref)
+    if (!sha)
+      die(
+        `Could not resolve ref '${ref}' in ${t.ws}/${t.repo}. Use "branches" or "tags" to list refs.`,
+      )
+    const dirUrl = buildUrl(
+      `${t.base}/src/${sha}/${path ? `${encPath(path)}/` : ""}`,
+      { pagelen: limit },
+    )
     let r
-    if (!path) {
-      r = await getJson(buildUrl(`${t.base}/src`, { at: ref, pagelen: limit }))
-    } else {
-      const sha = await resolveRef(t.base, ref)
-      if (!sha)
-        die(
-          `Could not resolve ref '${ref}' in ${t.ws}/${t.repo}. Use "branches" or "tags" to list refs.`,
-        )
-      const dirUrl = buildUrl(`${t.base}/src/${sha}/${encPath(path)}/`, {
-        pagelen: limit,
-      })
-      try {
-        const res = await rawGet(dirUrl)
-        if (!res.contentType.includes("json"))
-          return fileResult(res.body, path, ref, ctx)
-        r = parseJson(res.body, res.contentType, dirUrl)
-      } catch (e) {
-        if (!isNotFound(e)) throw e
-        // not a directory — maybe a file
-        return fileResult(
-          await getText(buildUrl(`${t.base}/src/${sha}/${encPath(path)}`)),
-          path,
-          ref,
-          ctx,
-        )
-      }
+    try {
+      const res = await rawGet(dirUrl)
+      if (!res.contentType.includes("json"))
+        return fileResult(res.body, path, ref, ctx)
+      r = parseJson(res.body, res.contentType, dirUrl)
+    } catch (e) {
+      if (!path || !isNotFound(e)) throw e
+      // not a directory — maybe a file
+      return fileResult(
+        await getText(buildUrl(`${t.base}/src/${sha}/${encPath(path)}`)),
+        path,
+        ref,
+        ctx,
+      )
     }
     const items = (r.values || []).map(
       (i) =>
@@ -819,9 +985,20 @@ function fileResult(content, path, ref, ctx) {
     }
   }
   const eol = content.includes("\r\n") ? "\r\n" : "\n"
-  const lines = content.split(/\r?\n/)
-  const start = Math.max(1, num(ctx.flags.start) ?? 1)
-  const limit = Math.min(num(ctx.flags.limit) ?? 1000, 10000)
+  const lines = content === "" ? [] : content.split(/\r?\n/)
+  // A final line ending terminates the last line; it does not start an empty extra one.
+  if (lines.length && lines[lines.length - 1] === "") lines.pop()
+  if (!lines.length)
+    return {
+      data: { file_path: path, ref, total_lines: 0, content: "" },
+      text: `File: ${path} @ ${ref} is empty.`,
+    }
+  const start = int(ctx.flags.start, "--start") ?? 1
+  const limit = Math.min(int(ctx.flags.limit, "--limit") ?? 1000, 10000)
+  if (start > lines.length)
+    die(
+      `--start ${start} is past the end of ${path}, which has ${lines.length} line(s).`,
+    )
   const end = Math.min(start + limit - 1, lines.length)
   const slice = lines.slice(start - 1, end)
   const data = {
@@ -871,22 +1048,28 @@ def(
   async (ctx) => {
     const t = repoCtx(ctx, 2)
     const [commit, path] = t.rest
+    // Resolve first, like file/browse: a branch name with "/" would not survive as one encoded segment.
+    const sha = await resolveRef(t.base, commit)
+    if (!sha)
+      die(
+        `Could not resolve ref '${commit}' in ${t.ws}/${t.repo}. Use "branches" or "tags" to list refs.`,
+      )
     const r = await getList(
       ctx,
-      `${t.base}/filehistory/${enc(commit)}/${encPath(path)}`,
+      `${t.base}/filehistory/${sha}/${encPath(path.replace(/^\/+/, ""))}`,
     )
-    const text = r.values.length
-      ? `History of ${path} from ${commit}:\n` +
-        r.values
-          .map(
-            (e) =>
-              `- ${short(e.commit.hash)} ${first(e.commit.message)}\n    ${commitAuthor(e.commit)}  ${e.commit.date}${e.size != null ? `  (${e.size} bytes)` : ""}`,
-          )
-          .join("\n") +
-        pageNote(r, ctx)
-      : none("history")
+    const text = listText(
+      `History of ${path} from ${commit}`,
+      r,
+      ctx,
+      (e) =>
+        commitLine(e.commit) +
+        (e.size != null ? `  (${e.size} bytes)` : ""),
+      "history",
+    )
     return { data: r, text }
   },
+  { paged: true },
 )
 
 // --- branches, tags, commits
@@ -899,17 +1082,16 @@ def(
     const r = await getList(ctx, `${t.base}/refs/branches`)
     return {
       data: r,
-      text: r.values.length
-        ? listHeader(`Branches in ${t.ws}/${t.repo}`, r) +
-          r.values
-            .map(
-              (b) => `- ${b.name}  ${short(b.target.hash)}  ${b.target.date}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("branches"),
+      text: listText(
+        `Branches in ${t.ws}/${t.repo}`,
+        r,
+        ctx,
+        (b) => `- ${b.name}  ${short(b.target.hash)}  ${b.target.date}`,
+        "branches",
+      ),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -948,17 +1130,16 @@ def(
     const r = await getList(ctx, `${t.base}/refs/tags`)
     return {
       data: r,
-      text: r.values.length
-        ? listHeader(`Tags in ${t.ws}/${t.repo}`, r) +
-          r.values
-            .map(
-              (g) => `- ${g.name}  ${short(g.target.hash)}  ${g.target.date}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("tags"),
+      text: listText(
+        `Tags in ${t.ws}/${t.repo}`,
+        r,
+        ctx,
+        (g) => `- ${g.name}  ${short(g.target.hash)}  ${g.target.date}`,
+        "tags",
+      ),
     }
   },
+  { paged: true },
 )
 
 def("tag", "tag <ws>/<repo> <name>", "Tag details", async (ctx) => {
@@ -996,18 +1177,16 @@ def(
     const r = await getList(ctx, `${t.base}/commits${sha ? `/${sha}` : ""}`)
     return {
       data: r,
-      text: r.values.length
-        ? `Commits in ${t.ws}/${t.repo}${ref ? ` (${ref})` : ""}:\n` +
-          r.values
-            .map(
-              (c) =>
-                `- ${short(c.hash)} ${first(c.message)}\n    ${commitAuthor(c)}  ${c.date}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("commits"),
+      text: listText(
+        `Commits in ${t.ws}/${t.repo}${ref ? ` (${ref})` : ""}`,
+        r,
+        ctx,
+        commitLine,
+        "commits",
+      ),
     }
   },
+  { paged: true },
 )
 
 def("commit", "commit <ws>/<repo> <hash>", "Commit details", async (ctx) => {
@@ -1032,14 +1211,24 @@ def(
   "CI/build statuses for a commit",
   async (ctx) => {
     const t = repoCtx(ctx, 1)
-    const r = await getList(ctx, `${t.base}/commit/${enc(t.rest[0])}/statuses`)
+    // Status lists are short and you nearly always want all of them, so ask for a full page.
+    const r = await getList(
+      ctx,
+      `${t.base}/commit/${enc(t.rest[0])}/statuses`,
+      { pagelen: MAX_PAGELEN },
+    )
     return {
       data: r,
-      text: r.values.length
-        ? `Build statuses for ${short(t.rest[0])}:\n${statusLines(r.values)}`
-        : none("build statuses"),
+      text: listText(
+        `Build statuses for ${short(t.rest[0])}`,
+        r,
+        ctx,
+        statusLine,
+        "build statuses",
+      ),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1061,7 +1250,7 @@ def(
 // --- diffs
 function diffParams(ctx, withContext) {
   const p = { path: ctx.flags.path }
-  if (withContext) p.context = num(ctx.flags.context)
+  if (withContext) p.context = int(ctx.flags.context, "--context", 0)
   return p
 }
 
@@ -1103,32 +1292,39 @@ def(
       text: diffstatText(`${spec} in ${t.ws}/${t.repo}`, r) + pageNote(r, ctx),
     }
   },
+  { paged: true },
 )
 
 // --- pull requests
 def(
   "prs",
   "prs <ws>/<repo> [--state OPEN|MERGED|DECLINED|SUPERSEDED] [--q BBQL]",
-  "List pull requests",
+  "List pull requests (open only unless --state is given)",
   async (ctx) => {
     const t = repoCtx(ctx)
-    const r = await getList(ctx, `${t.base}/pullrequests`, {
-      state: ctx.flags.state && ctx.flags.state.toUpperCase(),
-    })
-    return {
-      data: r,
-      text: r.values.length
-        ? listHeader(`Pull requests in ${t.ws}/${t.repo}`, r) +
-          r.values
-            .map(
-              (p) =>
-                `- #${p.id} [${p.state}] ${p.title}\n    ${who(p.author)}  ${p.source.branch.name} -> ${p.destination.branch.name}  created ${p.created_on}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("pull requests"),
-    }
+    const state = ctx.flags.state && ctx.flags.state.toUpperCase()
+    const r = await getList(ctx, `${t.base}/pullrequests`, { state })
+    // Bitbucket returns only OPEN PRs when no state is given; say so, or "no PR for X" reads as "never existed".
+    const openOnly = !state && !/\bstate\b/.test(ctx.flags.q || "")
+    const label = state
+      ? `${state} pull requests`
+      : openOnly
+        ? "Open pull requests"
+        : "Pull requests"
+    const text =
+      openOnly && !r.values.length
+        ? `No open pull requests found in ${t.ws}/${t.repo}. Merged, declined and superseded PRs are only listed with --state.`
+        : listText(
+            `${label} in ${t.ws}/${t.repo}`,
+            r,
+            ctx,
+            (p) =>
+              `- #${p.id} [${p.state}] ${p.title}\n    ${who(p.author)}  ${p.source.branch.name} -> ${p.destination.branch.name}  created ${p.created_on}`,
+            "pull requests",
+          )
+    return { data: r, text }
   },
+  { paged: true },
 )
 
 def(
@@ -1172,11 +1368,17 @@ def(
     const r = await getList(ctx, `${t.pr}/comments`)
     return {
       data: r,
-      text: r.values.length
-        ? `Comments on PR #${t.id} (${r.size ?? r.values.length} total):\n\n${r.values.map(commentLine).join("\n\n")}${pageNote(r, ctx)}`
-        : none("comments"),
+      text: listText(
+        `Comments on PR #${t.id}`,
+        r,
+        ctx,
+        commentLine,
+        "comments",
+        "\n\n",
+      ),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1185,7 +1387,9 @@ def(
   "A single PR comment",
   async (ctx) => {
     const t = prCtx(ctx, 1)
-    const c = await getJson(buildUrl(`${t.pr}/comments/${num(t.rest[0])}`))
+    const c = await getJson(
+      buildUrl(`${t.pr}/comments/${int(t.rest[0], "Comment id")}`),
+    )
     return { data: c, text: commentLine(c) }
   },
 )
@@ -1196,7 +1400,7 @@ def(
   "A comment plus all nested replies",
   async (ctx) => {
     const t = prCtx(ctx, 1)
-    const rootId = num(t.rest[0])
+    const rootId = int(t.rest[0], "Comment id")
     const root = await getJson(buildUrl(`${t.pr}/comments/${rootId}`))
     // Replies can sit on any page, so fetch them all: drop the user's paging/filter flags and lift the page cap.
     const all = await getList(
@@ -1242,22 +1446,24 @@ def(
   async (ctx) => {
     const t = prCtx(ctx)
     const r = await getList(ctx, `${t.pr}/activity`)
-    const lines = r.values.map((a) => {
+    const line = (a) => {
       if (a.comment)
         return `- comment by ${who(a.comment.user)} (${a.comment.created_on}): ${first(a.comment.content?.raw)}`
       if (a.approval)
         return `- approval by ${who(a.approval.user)} (${a.approval.date})`
+      if (a.changes_requested)
+        return `- changes requested by ${who(a.changes_requested.user)} (${a.changes_requested.date})`
       if (a.update)
         return `- update by ${who(a.update.author)} (${a.update.date}): state=${a.update.state}${a.update.title ? ` title="${a.update.title}"` : ""}`
-      return `- ${Object.keys(a).join(", ")}`
-    })
+      // Every entry carries pull_request; name only the keys that say what kind of entry this is.
+      return `- ${Object.keys(a).filter((k) => k !== "pull_request").join(", ") || "unknown activity"}`
+    }
     return {
       data: r,
-      text: lines.length
-        ? `Activity on PR #${t.id}:\n${lines.join("\n")}${pageNote(r, ctx)}`
-        : none("activity"),
+      text: listText(`Activity on PR #${t.id}`, r, ctx, line, "activity"),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1290,6 +1496,7 @@ def(
         diffstatText(`PR #${t.id} in ${t.ws}/${t.repo}`, r) + pageNote(r, ctx),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1301,18 +1508,10 @@ def(
     const r = await getList(ctx, `${t.pr}/commits`)
     return {
       data: r,
-      text: r.values.length
-        ? `Commits in PR #${t.id}:\n` +
-          r.values
-            .map(
-              (c) =>
-                `- ${short(c.hash)} ${first(c.message)}\n    ${commitAuthor(c)}  ${c.date}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("commits"),
+      text: listText(`Commits in PR #${t.id}`, r, ctx, commitLine, "commits"),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1321,36 +1520,72 @@ def(
   "CI/build statuses for a PR",
   async (ctx) => {
     const t = prCtx(ctx)
-    const r = await getList(ctx, `${t.pr}/statuses`)
+    const r = await getList(ctx, `${t.pr}/statuses`, { pagelen: MAX_PAGELEN })
     return {
       data: r,
-      text: r.values.length
-        ? `Build statuses for PR #${t.id}:\n${statusLines(r.values)}`
-        : none("build statuses"),
+      text: listText(
+        `Build statuses for PR #${t.id}`,
+        r,
+        ctx,
+        statusLine,
+        "build statuses",
+      ),
     }
   },
+  { paged: true },
 )
 
 def(
   "pr-context",
-  "pr-context <PR-URL | ws/repo id | ws/repo --branch NAME> [--full]",
+  "pr-context <ws>/<repo> <id> [--full]   |   pr-context <PR-URL> [--full]   |   pr-context <ws>/<repo> --branch NAME",
   "One-shot PR briefing: metadata, diffstat totals, build status, recent comments",
   async (ctx) => {
     const t = repoCtx(ctx)
-    let id = t.prId ?? num(t.rest[0])
+    let id = t.prId
+    const rest = [...t.rest]
+    if (id === undefined && rest.length) {
+      if (!/^\d+$/.test(rest[0]))
+        die(
+          `"${rest[0]}" is not a pull request id.${ctx.flags.branch ? "" : ` To find the open PR for a branch, use --branch ${rest[0]}.`}`,
+        )
+      id = Number(rest.shift())
+    }
+    if (rest.length) die(unexpectedArg(C["pr-context"], rest[0]))
     if (!id && ctx.flags.branch) {
+      const branch = ctx.flags.branch
       const s = await getJson(
         buildUrl(`${t.base}/pullrequests`, {
-          q: `source.branch.name=${bbqlString(ctx.flags.branch)} AND state="OPEN"`,
-          pagelen: 1,
+          q: `source.branch.name=${bbqlString(branch)} AND state="OPEN"`,
+          pagelen: 10,
         }),
       )
-      id = s.values?.[0]?.id
-      if (!id)
+      const found = s.values || []
+      if (!found.length)
         return {
           data: { found: false },
-          text: `No open pull request found for branch "${ctx.flags.branch}" in ${t.ws}/${t.repo}.`,
+          text: `No open pull request found for branch "${branch}" in ${t.ws}/${t.repo}.`,
         }
+      // A branch can have open PRs to several targets (develop, release/*); picking one silently would mislead.
+      if (found.length > 1 || s.next)
+        return {
+          data: {
+            found: false,
+            candidates: found.map((p) => ({
+              id: p.id,
+              title: p.title,
+              destination: p.destination?.branch?.name,
+            })),
+          },
+          text: [
+            `${s.size ?? found.length} open pull requests come from branch "${branch}" in ${t.ws}/${t.repo}. Pick one and rerun as: pr-context ${t.ws}/${t.repo} <id>`,
+            ...found.map(
+              (p) =>
+                `- #${p.id} ${p.title}  (${p.source.branch.name} -> ${p.destination.branch.name})`,
+            ),
+            ...(s.next ? ["(more exist; list them with prs --q)"] : []),
+          ].join("\n"),
+        }
+      id = found[0].id
     }
     if (!id)
       die(
@@ -1374,17 +1609,23 @@ def(
           pagelen: MAX_PAGELEN,
         }),
       ),
-      soft("statuses", () => getJson(buildUrl(`${pr}/statuses`))),
-      // newest first; fall back to the default order if the server rejects sorting
+      soft("statuses", () =>
+        getJson(buildUrl(`${pr}/statuses`, { pagelen: MAX_PAGELEN })),
+      ),
+      // newest first; fall back to the default order only if the server rejects the sort (400), not on
+      // auth errors or timeouts, which would just fail twice
       soft("comments", () =>
         getJson(
           buildUrl(`${pr}/comments`, {
             pagelen: full ? 20 : 3,
             sort: "-created_on",
           }),
-        ).catch(() =>
-          getJson(buildUrl(`${pr}/comments`, { pagelen: full ? 20 : 3 })),
-        ),
+        ).catch((e) => {
+          if (!(e instanceof ApiError && e.status === 400)) throw e
+          return getJson(
+            buildUrl(`${pr}/comments`, { pagelen: full ? 20 : 3 }),
+          )
+        }),
       ),
     ])
     const unavailable = (key) => `Unavailable: ${errors[key]}`
@@ -1416,11 +1657,15 @@ def(
       "",
       "--- Build status ---",
       st?.values?.length
-        ? statusLines(st.values)
+        ? st.values.map(statusLine).join("\n")
         : errors.statuses
           ? unavailable("statuses")
           : "No build statuses found.",
     )
+    if (st?.next)
+      L.push(
+        `(WARNING: only the first ${st.values.length} build statuses are shown. Use pr-statuses --all for the rest)`,
+      )
     L.push("", "--- Comments ---")
     if (cm?.values?.length) {
       L.push(
@@ -1449,20 +1694,20 @@ def(
   async (ctx) => {
     const t = repoCtx(ctx)
     const r = await getList(ctx, `${t.base}/pipelines`, { sort: "-created_on" })
+    const line = (p) =>
+      [
+        `- #${p.build_number} ${pipelineState(p.state)}`,
+        p.target?.ref_name || "n/a",
+        p.trigger?.name || "",
+        duration(p.duration_in_seconds),
+        `${p.created_on}\n    ${p.uuid}`,
+      ].join("  ")
     return {
       data: r,
-      text: r.values.length
-        ? listHeader(`Pipelines in ${t.ws}/${t.repo}`, r) +
-          r.values
-            .map(
-              (p) =>
-                `- #${p.build_number} ${pipelineState(p.state)}  ${p.target?.ref_name || "n/a"}  ${p.trigger?.name || ""}  ${duration(p.duration_in_seconds)}  ${p.created_on}\n    ${p.uuid}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("pipelines"),
+      text: listText(`Pipelines in ${t.ws}/${t.repo}`, r, ctx, line, "pipelines"),
     }
   },
+  { paged: true },
 )
 
 def(
@@ -1495,47 +1740,103 @@ def(
   "Steps of a pipeline run",
   async (ctx) => {
     const t = repoCtx(ctx, 1)
+    // Parallel steps easily exceed the default page of 10, which could hide the failing one.
     const r = await getList(
       ctx,
       `${t.base}/pipelines/${enc(braces(t.rest[0]))}/steps`,
+      { pagelen: MAX_PAGELEN },
     )
     return {
       data: r,
-      text: r.values.length
-        ? "Pipeline steps:\n" +
-          r.values
-            .map(
-              (s, i) =>
-                `- ${s.name || `Step ${i + 1}`}: ${pipelineState(s.state)}  ${duration(s.duration_in_seconds)}\n    ${s.uuid}`,
-            )
-            .join("\n")
-        : none("steps"),
+      text: listText(
+        "Pipeline steps",
+        r,
+        ctx,
+        (s, i) =>
+          `- ${s.name || `Step ${i + 1}`}: ${pipelineState(s.state)}  ${duration(s.duration_in_seconds)}\n    ${s.uuid}`,
+        "steps",
+      ),
     }
   },
+  { paged: true },
 )
+
+const LOG_404_HINT =
+  "No log for this step. It may not have run yet (queued or skipped), its log may have expired under the retention period, or a UUID is wrong; list the steps with pipeline-steps."
+
+/**
+ * Fetch the end of a step log. Asks for only the last bytes with a Range request and falls back to the
+ * full download when the server ignores it, rejects it (416) or the range turns out too short.
+ * Returns { text (ANSI stripped), partial, totalBytes }.
+ */
+async function fetchStepLog(url, tail) {
+  // The log endpoint answers 406 to Accept: text/plain; it only serves application/octet-stream.
+  // It may redirect to log storage on another origin; that hop gets no credentials (see fetchChecked).
+  const get = (headers = {}) =>
+    rawGet(url, {
+      accept: "application/octet-stream",
+      headers,
+      foreignRedirects: true,
+    })
+  const full = async () => ({
+    text: stripAnsi((await get()).body),
+    partial: false,
+  })
+  try {
+    let res
+    try {
+      // 4 bytes per char covers UTF-8 and leaves room for colour codes that are stripped below.
+      res = await get({ Range: `bytes=-${tail * 4}` })
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 416) return await full()
+      throw e
+    }
+    const m = /bytes (\d+)-\d+\/(\d+|\*)/.exec(
+      res.headers.get("content-range") || "",
+    )
+    if (res.status !== 206 || !m || Number(m[1]) === 0)
+      return { text: stripAnsi(res.body), partial: false }
+    // The range starts mid-line (maybe mid-character or mid-escape-code): drop that first partial line.
+    let text = stripAnsi(res.body)
+    text = text.slice(text.indexOf("\n") + 1)
+    if (text.length < tail) return await full()
+    return {
+      text,
+      partial: true,
+      totalBytes: m[2] === "*" ? undefined : Number(m[2]),
+    }
+  } catch (e) {
+    if (isNotFound(e)) e.hint = LOG_404_HINT
+    throw e
+  }
+}
 
 def(
   "pipeline-step-log",
   "pipeline-step-log <ws>/<repo> <pipeline-uuid> <step-uuid> [--tail CHARS]",
-  "Build log of a step (last 50000 chars by default — failures are at the end)",
+  "Build log of a step (last 50000 chars by default — failures are at the end; colour codes removed)",
   async (ctx) => {
     const t = repoCtx(ctx, 2)
-    // The log endpoint answers 406 to Accept: text/plain; it only serves application/octet-stream.
-    const log = await getText(
+    const tail = int(ctx.flags.tail, "--tail") ?? 50000
+    const { text: log, partial, totalBytes } = await fetchStepLog(
       buildUrl(
         `${t.base}/pipelines/${enc(braces(t.rest[0]))}/steps/${enc(braces(t.rest[1]))}/log`,
       ),
-      "application/octet-stream",
+      tail,
     )
     if (!log.trim())
       return { data: { log: "" }, text: "No log output found for this step." }
-    const tail = num(ctx.flags.tail) ?? 50000
-    const truncated = log.length > tail
-    const out = truncated ? log.slice(-tail) : log
+    const truncated = partial || log.length > tail
+    const out = log.length > tail ? log.slice(-tail) : log
+    const whole = partial
+      ? totalBytes
+        ? `a ${totalBytes}-byte log`
+        : "a longer log"
+      : `${log.length} chars`
     // keepTail: a global --max-chars must cut the start of this output, not the end, where the failure is.
     return {
       data: { log: out, truncated },
-      text: `${truncated ? `(showing last ${tail} of ${log.length} chars)\n` : ""}${out}`,
+      text: `${truncated ? `(showing last ${out.length} chars of ${whole})\n` : ""}${out}`,
       keepTail: true,
     }
   },
@@ -1556,25 +1857,24 @@ def(
       `${t.base}/issues`,
       clauses.length ? { q: clauses.join(" AND ") } : {},
     )
+    const line = (i) =>
+      [
+        `- #${i.id} [${i.state}/${i.kind}/${i.priority}] ${i.title}`,
+        `    reporter ${who(i.reporter)}, assignee ${i.assignee ? who(i.assignee) : "unassigned"}, created ${i.created_on}`,
+      ].join("\n")
     return {
       data: r,
-      text: r.values.length
-        ? listHeader(`Issues in ${t.ws}/${t.repo}`, r) +
-          r.values
-            .map(
-              (i) =>
-                `- #${i.id} [${i.state}/${i.kind}/${i.priority}] ${i.title}\n    reporter ${who(i.reporter)}, assignee ${i.assignee ? who(i.assignee) : "unassigned"}, created ${i.created_on}`,
-            )
-            .join("\n") +
-          pageNote(r, ctx)
-        : none("issues"),
+      text: listText(`Issues in ${t.ws}/${t.repo}`, r, ctx, line, "issues"),
     }
   },
+  { paged: true },
 )
 
 def("issue", "issue <ws>/<repo> <id>", "Issue details", async (ctx) => {
   const t = repoCtx(ctx, 1)
-  const i = await getJson(buildUrl(`${t.base}/issues/${num(t.rest[0])}`))
+  const i = await getJson(
+    buildUrl(`${t.base}/issues/${int(t.rest[0], "Issue id")}`),
+  )
   return {
     data: i,
     text: [
@@ -1614,13 +1914,18 @@ def(
       )
       return body.length ? `${head}\n${body.join("\n")}` : head
     }
-    const text = r.values?.length
-      ? `Code search "${q}" in ${ws} (${r.size ?? r.values.length} files):\n\n` +
-        r.values.map(matchText).join("\n\n") +
-        pageNote(r, ctx)
-      : none("code matches")
+    const text = listText(
+      `Code search "${q}" in ${ws}`,
+      r,
+      ctx,
+      matchText,
+      "code matches",
+      "\n\n",
+    )
     return { data: r, text }
   },
+  // The code search endpoint takes its filters inside search_query, not as BBQL --q/--sort.
+  { paged: true, query: false },
 )
 
 // ---------------------------------------------------------------- output / main
@@ -1645,29 +1950,47 @@ function project(data, select) {
   return pick(data)
 }
 
+const listFlags = (c) =>
+  c.paged
+    ? c.query
+      ? "list flags: --page --pagelen --all --max-pages --q --sort"
+      : "list flags: --page --pagelen --all --max-pages (no --q/--sort)"
+    : ""
+
 function help(name) {
-  if (name && C[name])
-    return `node bb.mjs ${C[name].usage}\n  ${C[name].summary}`
+  if (name) {
+    const c =
+      C[name] || die(`Unknown command "${name}". Run: node bb.mjs help`)
+    return [
+      `node bb.mjs ${c.usage}`,
+      `  ${c.summary}`,
+      listFlags(c) && `  Also takes ${listFlags(c)}.`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
   const rows = Object.values(C).map(
-    (c) => `  ${c.usage.padEnd(78)} ${c.summary}`,
+    (c) => `  ${c.usage.padEnd(78)} ${c.summary}${c.paged ? "  [list]" : ""}`,
   )
   return [
-    "Read-only Bitbucket Cloud CLI.  node bb.mjs <command> [args] [flags]",
+    `Read-only Bitbucket Cloud CLI ${VERSION}.  node bb.mjs <command> [args] [flags]`,
     "",
     "Repo-scoped commands take <workspace>/<repo> (or a Bitbucket URL; or just <repo> if BITBUCKET_WORKSPACE is set).",
     "",
     ...rows,
     "",
-    "Global flags:",
+    "Output flags (every command):",
     "  --json            raw API JSON instead of the compact text view",
     "  --select a,b.c    JSON output limited to these (dotted) fields per item; implies --json",
-    "  --page N --pagelen N (max 100)   paging for list commands",
-    "  --all [--max-pages N]            follow every page (default cap 20 pages)",
-    "  --q BBQL --sort FIELD            server-side filter / sort for list commands (e.g. --q 'state=\"OPEN\"' --sort -updated_on)",
     "  --max-chars N     truncate output to N characters (keeps the end for pipeline-step-log)",
     "  -h, --help        show this help (or: help <command>)",
     "",
-    'Unknown flags are rejected. A flag value that starts with "--" must be written --flag=--value.',
+    "List flags (commands marked [list] only; search-code takes paging but not --q/--sort):",
+    "  --page N --pagelen N (max 100)   paging",
+    "  --all [--max-pages N]            follow every page (default cap 20 pages; raise it with --max-pages)",
+    "  --q BBQL --sort FIELD            server-side filter / sort (e.g. --q 'state=\"OPEN\"' --sort -updated_on)",
+    "",
+    'Unknown flags, flags a command would ignore, and extra arguments are rejected. A flag value that starts with "--" must be written --flag=--value; an argument that starts with "-" goes after "--".',
   ].join("\n")
 }
 
@@ -1681,7 +2004,13 @@ async function main() {
   const command = C[cmd]
   if (!command) die(`Unknown command "${cmd}". Run: node bb.mjs help`)
   checkFlags(command, flags)
-  const { data, text, keepTail } = await command.run({ cmd, pos, flags })
+  checkArgs(command, pos)
+  const { data, text, keepTail, exitCode } = await command.run({
+    cmd,
+    pos,
+    flags,
+  })
+  if (exitCode) process.exitCode = exitCode
   let out
   let isText = false
   if (flags.select) out = JSON.stringify(project(data, flags.select), null, 2)
@@ -1690,7 +2019,7 @@ async function main() {
     out = text
     isText = true
   }
-  const max = num(flags["max-chars"])
+  const max = int(flags["max-chars"], "--max-chars")
   if (max && out.length > max) {
     // JSON stays head-truncated (a tail slice would not be parseable); tail-first text keeps its end.
     out =
@@ -1701,10 +2030,49 @@ async function main() {
   console.log(out)
 }
 
-main().catch((e) => {
-  console.error(`Error: ${e.message}`)
-  const hint = hintFor(e)
-  if (hint) console.error(`Hint: ${hint}`)
-  // Not process.exit(1): exiting while fetch's sockets are still closing trips a libuv assertion on Windows (exit 127).
-  process.exitCode = 1
-})
+/** True when this file is the script being run (not imported, e.g. by the tests). */
+function invokedDirectly() {
+  if (!process.argv[1]) return false
+  let argv1
+  try {
+    argv1 = realpathSync(process.argv[1])
+  } catch {
+    argv1 = resolve(process.argv[1])
+  }
+  const self = fileURLToPath(import.meta.url)
+  return process.platform === "win32"
+    ? argv1.toLowerCase() === self.toLowerCase()
+    : argv1 === self
+}
+
+if (invokedDirectly())
+  main().catch((e) => {
+    console.error(`Error: ${e.message}`)
+    const hint = hintFor(e)
+    if (hint) console.error(`Hint: ${hint}`)
+    // Not process.exit(1): exiting while fetch's sockets are still closing trips a libuv assertion on Windows (exit 127).
+    process.exitCode = 1
+  })
+
+// Pure helpers, exported for tests/bb.test.mjs.
+export {
+  C as commands,
+  parseArgs,
+  checkFlags,
+  checkArgs,
+  maxArgs,
+  int,
+  enc,
+  encPath,
+  parseRepoToken,
+  rangeSpec,
+  bbqlString,
+  stripAnsi,
+  project,
+  fileResult,
+  diffstatText,
+  listText,
+  duration,
+  retryAfterMs,
+  rootCause,
+}
