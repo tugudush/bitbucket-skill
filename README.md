@@ -96,6 +96,7 @@ bb pr-diff acme/webapp 42 --path src/app.ts
 bb pipelines acme/webapp
 bb file acme/webapp src/app.ts --ref main --start 100 --limit 50
 bb search-code acme "parseInvoice" --extension ts
+bb search-code acme '"Ocean-SessionToken"' --files   # quoted phrase, paths only
 bb prs acme/webapp --q 'state="OPEN" AND author.nickname="dana"' --sort -updated_on
 ```
 

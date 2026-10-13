@@ -28,6 +28,14 @@ Documentation audit of README.md and SKILL.md against `bb.mjs`:
 - Added the commands the docs omitted (`repo`, `repos`, `pr-comment`, `pr-commits`, `pipeline`, `diffstat`, `branch`, `tag`, `check`) and the `diff`/`diffstat` flags `--ignore-whitespace` and `--topic`.
 - Corrected page-size, `--json`, `--max-chars`, `BITBUCKET_WORKSPACE`, proxy and `NODE_USE_SYSTEM_CA` statements.
 
+Fixes found while test-reviewing a real PR:
+
+- `search-code` prints snippet text verbatim. It used to wrap matched terms in `[[...]]`, which made snippets look like altered source. Matching lines are now marked with `>` in the gutter, lines the index left out are shown as `...`, and a footer says snippets can be incomplete.
+- `search-code` has a `--files` flag (paths and match counts only). When an unquoted query contains spaces, `-`, `.`, `:` or `/`, the output reminds that words are matched separately and shows the quoted form for an exact match.
+- `pr-activity` says what each update changed (status, reviewers added or removed, other fields by name) instead of only the PR state. The entry written when a PR is opened still shows state and title.
+- `pr-commits` labels merge commits `(merge commit)`, so a merged PR's merge commit is not mistaken for its source commit.
+- `pr-context` prints the source commit sha, which the review workflow uses as `--ref`. With `--full` it always prints the description section, showing `(none)` when the description is empty.
+
 ## 1.0.0
 
 Initial release.

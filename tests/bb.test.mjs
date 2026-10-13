@@ -229,6 +229,32 @@ function apiHandler(req, res) {
       values: [
         { changes_requested: { user: { display_name: "Dana" }, date: "2026-01-03" }, pull_request: { id: 1 } },
         { approval: { user: { display_name: "Eli" }, date: "2026-01-04" }, pull_request: { id: 1 } },
+        {
+          update: {
+            author: { display_name: "Ana" },
+            date: "2026-01-02",
+            state: "OPEN",
+            title: "PR 1",
+            changes: { reviewers: { added: [{ nickname: "Eli" }] } },
+          },
+        },
+        {
+          update: {
+            author: { display_name: "Ana" },
+            date: "2026-01-05",
+            state: "MERGED",
+            title: "PR 1",
+            changes: { status: { old: "open", new: "fulfilled" }, title: { old: "a", new: "b" } },
+          },
+        },
+        { update: { author: { display_name: "Ana" }, date: "2026-01-01", state: "OPEN", title: "PR 1", changes: {} } },
+      ],
+    })
+  if (path === `${R}/pullrequests/1/commits`)
+    return sendJson(res, 200, {
+      values: [
+        { hash: SHA, message: "Merged in x", date: "2026-01-05", author: { raw: "Ana" }, parents: [{ hash: SHA2 }, { hash: "c".repeat(40) }] },
+        { hash: SHA2, message: "Edit a", date: "2026-01-01", author: { raw: "Ana" }, parents: [{ hash: "c".repeat(40) }] },
       ],
     })
   if (path === `${R}/pipelines/%7Bp%7D/steps`)
@@ -255,6 +281,25 @@ function apiHandler(req, res) {
     return res.end()
   }
   if (path === `${R}/pipelines/%7Bp%7D/steps/%7Bgone%7D/log`) return sendJson(res, 404, { error: { message: "Not found" } })
+  if (path === "/2.0/workspaces/ws/search/code")
+    return sendJson(res, 200, {
+      size: 1,
+      values: [
+        {
+          file: { path: "src/a.ts" },
+          content_match_count: 1,
+          content_matches: [
+            {
+              lines: [
+                { line: 3, segments: [{ text: "const x = 1" }] },
+                { line: 4, segments: [{ text: "'" }, { text: "Ocean", match: true }, { text: "-Token': x" }] },
+                { line: 9, segments: [{ text: "}" }] },
+              ],
+            },
+          ],
+        },
+      ],
+    })
   sendJson(res, 404, { error: { message: `no mock for ${path}` } })
 }
 
@@ -332,6 +377,53 @@ describe("CLI against a mock API", () => {
     const r = await bb(["pr-context", "ws/repo", "1"])
     assert.equal(r.code, 0, r.stderr)
     assert.match(r.stdout, /WARNING: only the first 10 build statuses/)
+  })
+
+  test("pr-context prints the source commit and, with --full, an explicit empty description", async () => {
+    let r = await bb(["pr-context", "ws/repo", "1"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.match(r.stdout, new RegExp(`Source commit: ${SHA2}`))
+    assert.doesNotMatch(r.stdout, /--- Description ---/)
+    r = await bb(["pr-context", "ws/repo", "1", "--full"])
+    assert.match(r.stdout, /--- Description ---\n\(none\)/)
+  })
+
+  test("search-code keeps snippet text verbatim and marks matches and gaps", async () => {
+    const r = await bb(["search-code", "ws", "Ocean"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.doesNotMatch(r.stdout, /\[\[/)
+    assert.match(r.stdout, /^ {4}3: const x = 1$/m)
+    assert.match(r.stdout, /^ {2}> 4: 'Ocean-Token': x$/m)
+    assert.match(r.stdout, /4: 'Ocean-Token': x\n {4}\.\.\.\n {4}9: \}/)
+    assert.match(r.stdout, /search index and can be incomplete/)
+  })
+
+  test("search-code --files prints paths only and an unquoted phrase gets a quoting tip", async () => {
+    let r = await bb(["search-code", "ws", "Ocean-Token", "--files"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.match(r.stdout, /^src\/a\.ts \(1 matches\)$/m)
+    assert.doesNotMatch(r.stdout, /const x = 1/)
+    assert.doesNotMatch(r.stdout, /Snippets come from/)
+    assert.match(r.stdout, /quote it, e\.g\. '"Ocean-Token"'/)
+    r = await bb(["search-code", "ws", '"Ocean-Token"'])
+    assert.doesNotMatch(r.stdout, /quote it/)
+    r = await bb(["search-code", "ws", "Ocean"])
+    assert.doesNotMatch(r.stdout, /quote it/)
+  })
+
+  test("pr-commits labels the merge commit", async () => {
+    const r = await bb(["pr-commits", "ws/repo", "1"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.match(r.stdout, new RegExp(`- ${SHA.slice(0, 8)} \\(merge commit\\) Merged in x`))
+    assert.doesNotMatch(r.stdout, new RegExp(`${SHA2.slice(0, 8)} \\(merge commit\\)`))
+  })
+
+  test("pr-activity says what an update changed", async () => {
+    const r = await bb(["pr-activity", "ws/repo", "1"])
+    assert.equal(r.code, 0, r.stderr)
+    assert.match(r.stdout, /update by Ana \(2026-01-02\): reviewers added: Eli/)
+    assert.match(r.stdout, /update by Ana \(2026-01-05\): status open -> fulfilled; title changed/)
+    assert.match(r.stdout, /update by Ana \(2026-01-01\): state=OPEN title="PR 1"/)
   })
 
   test("browse with no path lists /src/{sha}/ (L1)", async () => {

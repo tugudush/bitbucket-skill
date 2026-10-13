@@ -53,12 +53,12 @@ When the user gives you a URL, pass it through unchanged rather than picking it 
 
 | The user wants… | Start with |
 |---|---|
-| The full picture of a PR in one shot | `pr-context <url>` (add `--full` for description, per-file stats, 20 comments; or `<ws>/<repo> --branch NAME` to find the open PR for a branch) |
+| The full picture of a PR in one shot | `pr-context <url>` (prints the source commit sha; add `--full` for description, per-file stats, 20 comments; or `<ws>/<repo> --branch NAME` to find the open PR for a branch) |
 | PR title, description, reviewers, state, source commit sha | `pr` |
 | Which PRs exist | `prs` (lists **open PRs only** unless `--state MERGED`/`DECLINED`/`SUPERSEDED`; check those before saying a PR doesn't exist) |
 | What reviewers said | `pr-comments <ws>/<repo> <id> --all`, then `comment-thread … <comment-id>` to follow one discussion (`pr-comment` fetches a single comment) |
-| Whether a PR is approved / what happened | `pr-activity` |
-| What a PR changes | `pr-diffstat` first, then `pr-diff --path <file>` for the files that matter; `pr-commits` lists the commits in it |
+| Whether a PR is approved / what happened | `pr-activity` (updates say what changed: status, reviewers added or removed, title, description, branches) |
+| What a PR changes | `pr-diffstat` first, then `pr-diff --path <file>` for the files that matter; `pr-commits` lists the commits in it (a merged PR's merge commit is labelled; review the source commit instead) |
 | Build / CI result for a PR or commit | `pr-statuses`, `commit-statuses` |
 | Why a pipeline failed | `pipelines` → `pipeline-steps <uuid>` → `pipeline-step-log <pipeline-uuid> <step-uuid>` (`pipeline <uuid>` shows one run's details; the tail of the log is shown, which is where failures are; colour codes are stripped) |
 | A file's contents | `file <ws>/<repo> <path> --ref <branch\|tag\|sha>` (line-numbered; `--start/--limit` to page; `--raw` for plain text) |
@@ -67,7 +67,7 @@ When the user gives you a URL, pass it through unchanged rather than picking it 
 | Compare two refs | `diffstat` / `diff <ws>/<repo> <a>..<b>` (both take `--path`, `--ignore-whitespace`, `--topic`; `diff` also `--context`); `merge-base <a>..<b>` |
 | Branches, tags, commits | `branches`, `branch`, `tags`, `tag`, `commits --branch X`, `commit <sha>` |
 | Repository details (default branch), repos in a workspace | `repo <ws>/<repo>`, `repos <ws>` |
-| Find a repo / find code | `search-repos <ws> <query>`, `search-code <ws> <query> [--repo --language --extension]` |
+| Find a repo / find code | `search-repos <ws> <query>`, `search-code <ws> <query> [--repo --language --extension --files]` |
 | Issues, users, workspaces | `issues`, `issue`, `user`, `me`, `workspaces`, `workspace` |
 | Anything else in the v2.0 API | `get repositories/<ws>/<repo>/…` (see Gotchas) |
 
@@ -86,13 +86,13 @@ Big responses cost context and bury the answer, so shape them before reading:
 
 ## Workflows worth knowing
 
-**Reviewing a PR.** `pr-context <url> --full` → `pr-diffstat` → `pr-diff --path` for the risky files → `file --ref <source commit sha>` when a diff needs surrounding code. The PR's source commit sha is printed by `pr`; use the sha rather than the branch name as `--ref` because it can't drift as new commits land.
+**Reviewing a PR.** `pr-context <url> --full` → `pr-diffstat` → `pr-diff --path` for the risky files → `file --ref <source commit sha>` when a diff needs surrounding code. The PR's source commit sha is printed by `pr-context` and `pr`; use the sha rather than the branch name as `--ref` because it can't drift as new commits land.
 
 **Triaging a red build.** `pr-statuses` (or `pipelines` for a repo) → note the failing pipeline UUID → `pipeline-steps` → `pipeline-step-log`. Quote the actual failing assertion/error from the log in your answer rather than paraphrasing.
 
 **Addressing review feedback.** `pr-comments --all`; inline comments show `[path:line]`, replies show `(reply to #id)`. Use `comment-thread` for the whole conversation on one comment. Work in the local checkout if the repo is cloned; this skill only reads the remote.
 
-**Locating code in a workspace.** `search-code` needs code search enabled for the account at bitbucket.org/search; if it returns nothing or errors, say so rather than concluding the code doesn't exist.
+**Locating code in a workspace.** `search-code` needs code search enabled for the account at bitbucket.org/search; if it returns nothing or errors, say so rather than concluding the code doesn't exist. Its snippets come from the search index: `>` marks lines with a match and `...` marks lines the index left out, and a returned line can itself be cut short. Use the results to find files, then read them with `file` before quoting code. The index matches each word separately, so an unquoted `Ocean-SessionToken` also finds files that only contain `sessionToken`: quote the phrase (`'"Ocean-SessionToken"'`) for an exact match. Start with `--files` (paths and match counts only) or `--extension`/`--repo` to keep the output small, then look at snippets for the few files that matter.
 
 ## Gotchas
 

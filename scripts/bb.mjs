@@ -43,6 +43,7 @@ const BOOLEAN_FLAGS = new Set([
   "raw",
   "ignore-whitespace",
   "topic",
+  "files",
   "help",
 ])
 
@@ -1439,6 +1440,27 @@ def(
   },
 )
 
+/**
+ * Say what a PR "update" entry changed, from its `changes` object (empty on the entry written when a PR is opened).
+ * Returns "" when the API reports nothing, so the caller can fall back to the PR state.
+ */
+function updateChanges(changes) {
+  const out = []
+  for (const [key, c] of Object.entries(changes || {})) {
+    if (!c || typeof c !== "object") continue
+    if (key === "reviewers") {
+      if (c.added?.length) out.push(`reviewers added: ${c.added.map(who).join(", ")}`)
+      if (c.removed?.length) out.push(`reviewers removed: ${c.removed.map(who).join(", ")}`)
+    } else if (key === "status") {
+      out.push(`status ${c.old} -> ${c.new}`)
+    } else {
+      // titles, descriptions and branches can be long and are third-party text: say that they changed, not what to
+      out.push(`${key} changed`)
+    }
+  }
+  return out.join("; ")
+}
+
 def(
   "pr-activity",
   "pr-activity <ws>/<repo> <id>",
@@ -1454,7 +1476,7 @@ def(
       if (a.changes_requested)
         return `- changes requested by ${who(a.changes_requested.user)} (${a.changes_requested.date})`
       if (a.update)
-        return `- update by ${who(a.update.author)} (${a.update.date}): state=${a.update.state}${a.update.title ? ` title="${a.update.title}"` : ""}`
+        return `- update by ${who(a.update.author)} (${a.update.date}): ${updateChanges(a.update.changes) || `state=${a.update.state}${a.update.title ? ` title="${a.update.title}"` : ""}`}`
       // Every entry carries pull_request; name only the keys that say what kind of entry this is.
       return `- ${Object.keys(a).filter((k) => k !== "pull_request").join(", ") || "unknown activity"}`
     }
@@ -1506,9 +1528,15 @@ def(
   async (ctx) => {
     const t = prCtx(ctx)
     const r = await getList(ctx, `${t.pr}/commits`)
+    // On a merged PR the merge commit comes first; label it so it is not mistaken for the source commit.
+    const line = (c) =>
+      commitLine(c).replace(
+        /^- (\S+)/,
+        (_, h) => `- ${h}${c.parents?.length > 1 ? " (merge commit)" : ""}`,
+      )
     return {
       data: r,
-      text: listText(`Commits in PR #${t.id}`, r, ctx, commitLine, "commits"),
+      text: listText(`Commits in PR #${t.id}`, r, ctx, line, "commits"),
     }
   },
   { paged: true },
@@ -1634,11 +1662,14 @@ def(
       `State: ${p.state}`,
       `Author: ${who(p.author)}`,
       `Branch: ${p.source.branch.name} -> ${p.destination.branch.name}`,
+      // the sha is what file/browse --ref should use, so the briefing must carry it
+      `Source commit: ${p.source.commit?.hash || "n/a"}`,
       `Created: ${p.created_on}  Updated: ${p.updated_on}`,
     ]
     if (p.reviewers?.length)
       L.push(`Reviewers: ${p.reviewers.map(who).join(", ")}`)
-    if (full && p.description) L.push("", "--- Description ---", p.description)
+    // always print the section under --full so an empty description is distinguishable from an omitted one
+    if (full) L.push("", "--- Description ---", p.description || "(none)")
     L.push("", "--- Diffstat ---")
     if (ds?.values?.length) {
       const a = ds.values.reduce((s, e) => s + lineCount(e.lines_added), 0)
@@ -1891,11 +1922,12 @@ def("issue", "issue <ws>/<repo> <id>", "Issue details", async (ctx) => {
 // --- code search
 def(
   "search-code",
-  "search-code <workspace> <query> [--repo SLUG] [--language L] [--extension EXT]",
-  "Code search across a workspace (needs code search enabled at bitbucket.org/search)",
+  "search-code <workspace> <query> [--repo SLUG] [--language L] [--extension EXT] [--files]",
+  'Code search across a workspace (needs code search enabled at bitbucket.org/search). Terms match separately: quote a phrase for an exact match, add --files for paths only',
   async (ctx) => {
     const ws = ctx.pos[0] || die("Missing workspace.")
-    let q = ctx.pos[1] || die("Missing query.")
+    const userQuery = ctx.pos[1] || die("Missing query.")
+    let q = userQuery
     if (ctx.flags.repo) q += ` repo:${ctx.flags.repo}`
     if (ctx.flags.language) q += ` language:${ctx.flags.language}`
     if (ctx.flags.extension) q += ` extension:${ctx.flags.extension}`
@@ -1903,26 +1935,50 @@ def(
       search_query: q,
     })
     // A path-only match has no content_matches, so every level is optional.
+    // Lines are printed as the index returned them (no inline markers, so the text stays copyable);
+    // ">" marks a line containing a match and "..." marks lines the index left out.
     const matchText = (v) => {
       const hits = v.content_matches || []
       const head = `${v.file.path} (${v.content_match_count ?? hits.length} matches)`
-      const body = hits.flatMap((m) =>
-        (m.lines || []).map(
-          (l) =>
-            `    ${l.line}: ${(l.segments || []).map((s) => (s.match ? `[[${s.text}]]` : s.text)).join("")}`,
-        ),
-      )
-      return body.length ? `${head}\n${body.join("\n")}` : head
+      const body = []
+      let prev
+      for (const m of hits)
+        for (const l of m.lines || []) {
+          if (prev !== undefined && l.line !== prev + 1) body.push("    ...")
+          prev = l.line
+          const segs = l.segments || []
+          const mark = segs.some((s) => s.match) ? ">" : " "
+          body.push(`  ${mark} ${l.line}: ${segs.map((s) => s.text).join("")}`)
+        }
+      return body.length && !ctx.flags.files
+        ? `${head}\n${body.join("\n")}`
+        : head
     }
+    const filesOnly = Boolean(ctx.flags.files)
     const text = listText(
       `Code search "${q}" in ${ws}`,
       r,
       ctx,
       matchText,
       "code matches",
-      "\n\n",
+      filesOnly ? "\n" : "\n\n",
     )
-    return { data: r, text }
+    const notes = []
+    if (r.values?.length) {
+      if (!filesOnly)
+        notes.push(
+          'Snippets come from the search index and can be incomplete. ">" marks a line with a match. Read the file with `file` for exact source.',
+        )
+      // The index matches each word on its own, so an unquoted phrase such as Ocean-SessionToken also finds "sessionToken" alone.
+      if (!userQuery.includes('"') && /[\s\-.:/]/.test(userQuery))
+        notes.push(
+          `Words are matched separately; for an exact phrase quote it, e.g. '"${userQuery}"'.`,
+        )
+    }
+    return {
+      data: r,
+      text: notes.length ? `${text}\n\n(${notes.join(" ")})` : text,
+    }
   },
   // The code search endpoint takes its filters inside search_query, not as BBQL --q/--sort.
   { paged: true, query: false },
