@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Documentation only, no change to `bb.mjs`: the skill is now written for any agent that supports Agent Skills, in particular Claude Code and GitHub Copilot in VS Code.
+
+- README: install table for both agents (`~/.claude/skills`, `~/.copilot/skills`, `.claude/skills`, `.github/skills`), a note that VS Code also reads `.claude/skills` so one clone serves both, and a fallback through `.github/copilot-instructions.md`.
+- SKILL.md: "Bash tool" and "Claude Code" replaced by agent-neutral wording, how to find the skill's base directory in any agent, and a note on PowerShell quoting and pipes.
+
 ## 1.2.12 (2026-10-13)
 
 Fixes from an eleventh review run (#678, 40 files, merged; notes in `test-skill/otg-keycloak-ui-pr-678-review-run11.md`, issues 1-3):

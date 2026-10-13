@@ -2,7 +2,7 @@
   "name": "bitbucket-cloud-skill",
   "version": "1.2.12",
   "private": true,
-  "description": "Read-only Bitbucket Cloud CLI for a Claude Code skill (no dependencies)",
+  "description": "Read-only Bitbucket Cloud CLI for an agent skill, usable from Claude Code and GitHub Copilot (no dependencies)",
   "engines": {
     "node": ">=20"
   },
