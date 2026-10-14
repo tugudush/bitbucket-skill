@@ -33,5 +33,6 @@ desktop.ini
 *.swp
 *.swo
 
-# Local test skill
-test-skill
+# Local test skill (only its README is tracked)
+test-skill/*
+!test-skill/README.md

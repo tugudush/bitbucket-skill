@@ -1,17 +1,17 @@
-import js from "@eslint/js"
-import globals from "globals"
-import prettier from "eslint-config-prettier"
+import js from '@eslint/js'
+import globals from 'globals'
+import prettier from 'eslint-config-prettier'
 
 export default [
   {
-    ignores: ["node_modules/", "test-skill/"],
+    ignores: ['node_modules/', 'test-skill/'],
   },
   js.configs.recommended,
   {
-    files: ["**/*.mjs"],
+    files: ['**/*.mjs'],
     languageOptions: {
       ecmaVersion: 2024,
-      sourceType: "module",
+      sourceType: 'module',
       globals: { ...globals.node },
     },
   },
