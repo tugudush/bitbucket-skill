@@ -67,7 +67,24 @@ Set these in your own environment, **not in the chat, in a command line, or in a
 | `BITBUCKET_MAX_FILE_BYTES`  | no       | Largest file `file` and `browse` will download, in bytes. Default `10000000` (10 MB). Binary files are never downloaded in full, whatever the limit                                                                                                                           |
 
 - **Windows:** Start menu → "Edit environment variables for your account" → add the variables under _User variables_.
-- **macOS / Linux:** export them from your shell profile (`~/.zshrc`, `~/.bashrc`) or a secrets manager.
+- **macOS / Linux:** export them from your shell profile (`~/.zshrc`, `~/.bashrc`) or a secrets manager. For example, add these lines to `~/.zshrc` (or `~/.bashrc`), using your own values:
+
+  ```bash
+  export BITBUCKET_EMAIL="you@example.com"
+  export BITBUCKET_API_TOKEN="your-atlassian-api-token"
+  export BITBUCKET_WORKSPACE="acme"   # optional
+  ```
+
+  Then run `source ~/.zshrc` (or open a new terminal). To keep the token out of the profile, store it in a file that only you can read and export it from there:
+
+  ```bash
+  mkdir -p ~/.config/bitbucket && chmod 700 ~/.config/bitbucket
+  # create ~/.config/bitbucket/token in your editor and paste the token, then:
+  chmod 600 ~/.config/bitbucket/token
+  export BITBUCKET_API_TOKEN="$(cat ~/.config/bitbucket/token)"
+  ```
+
+  Don't type the token on a command line: it would be saved in your shell history.
 
 Then open a **new terminal** (and restart Claude Code, or fully quit and reopen VS Code) so the variables are visible to the agent's terminal.
 
