@@ -28,6 +28,8 @@ Clone this repository into a skills folder that your agent reads. The folder mus
 | Claude Code               | `~/.claude/skills/bitbucket-cloud/`  | `<project>/.claude/skills/bitbucket-cloud/` |
 | GitHub Copilot in VS Code | `~/.copilot/skills/bitbucket-cloud/` | `<project>/.github/skills/bitbucket-cloud/` |
 
+> **Note:** GitHub Copilot in VS Code also reads skills from `~/.claude/skills/` and `<project>/.claude/skills/`, so a skill installed in the Claude Code location above is also picked up by Copilot. You don't need a second copy. See [One install can serve both agents](#1-install-the-skill) below.
+
 ```bash
 git clone <this-repo-url> ~/.claude/skills/bitbucket-cloud
 ```
